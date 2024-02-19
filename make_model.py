@@ -5,6 +5,7 @@ import random
 from model.backbones.vit_pytorch import deit_tiny_patch16_224_TransReID, part_attention_deit_small, part_attention_deit_tiny, part_attention_vit_base, part_attention_vit_base_p32, part_attention_vit_large, part_attention_vit_small, vit_base_patch32_224_TransReID, vit_large_patch16_224_TransReID
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from .backbones.transformer import TransformerDecoder,TransformerDecoderLayer
 from .backbones.resnet import BasicBlock, ResNet, Bottleneck
 from .backbones import vit_base_patch16_224_TransReID, vit_small_patch16_224_TransReID, deit_small_patch16_224_TransReID
@@ -341,7 +342,9 @@ class build_ctc_vit(nn.Module):
         self.gap = nn.AdaptiveAvgPool2d(1)
 
         self.num_classes = num_classes
-
+        self.input_shape=cfg.INPUT.SIZE_TRAIN
+        self.input_H=self.input_shape[0]
+        self.input_W=self.input_shape[1]
         self.base = factory[cfg.MODEL.TRANSFORMER_TYPE]\
             (img_size=cfg.INPUT.SIZE_TRAIN,
             stride_size=cfg.MODEL.STRIDE_SIZE,
@@ -370,10 +373,15 @@ class build_ctc_vit(nn.Module):
         self.DecoderLayer=TransformerDecoderLayer(d_model= self.in_planes,nhead=8)
         self.Decoder=TransformerDecoder(self.DecoderLayer,num_layers=6)
         self.sem_query=     nn.Embedding(self.nb_sem, self.in_planes)
-        self.segmenter=nn.Sequential(nn.Linear(self.in_planes,int(cfg.INPUT.SIZE_TRAIN[0]/cfg.MODEL.STRIDE_SIZE[0] * \
-                                                                                                    cfg.INPUT.SIZE_TRAIN[1]/cfg.MODEL.STRIDE_SIZE[1])),
+        self.segmenter=nn.Sequential(nn.Linear(self.in_planes,int(cfg.INPUT.SIZE_TRAIN[0] /2* \
+                                                                                                    cfg.INPUT.SIZE_TRAIN[1]/2)),
+                                                                    
                                    )
         self.part_classify_token=nn.Parameter(torch.zeros(1, 1, self.in_planes))
+        self.upsample=nn.Sequential(deconv2d_bn(64,32),
+                                    deconv2d_bn(32,16),
+                                    deconv2d_bn(16,4),
+                                    deconv2d_bn(4,1))
     def forward(self, x):
         b,c,h,w=x.shape
         layerwise_tokens = self.base(x) # B, N, C   64,132,768
@@ -384,8 +392,11 @@ class build_ctc_vit(nn.Module):
         sem_query=torch.unsqueeze(self.sem_query.weight, 0).repeat(b,1,1)
         tgt_mask=self.generate_tgt_mask (sem_query)
         decoder_out=self.Decoder(sem_query,encoder_out,tgt_mask=tgt_mask)
-        segmentation=self.segmenter(decoder_out) # 64,5,128
-        # print(segmentation>0.5 )
+        # segmentation=self.segmenter(decoder_out) # 64,5,128(X)     64,5,512
+        segmentation=self.segmenter(decoder_out).view(b*self.nb_sem,int(self.input_H/16),int(self.input_W/16),-1).permute(0,3,1,2) #   32,3,16,8,64
+        segmentation=self.upsample(segmentation).view(b,self.nb_sem,-1,self.input_H,self.input_W).permute(0,1,3,4,2)
+        segmentation=torch.squeeze(segmentation)
+        # print(segmentation.shape )
         segmentation=nn.functional.sigmoid(segmentation)
         feat = self.bottleneck(layerwise_cls_tokens)
 
@@ -455,6 +466,17 @@ class GradientReversalfunc(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         return - grad_output
+class deconv2d_bn(nn.Module):
+    def __init__(self,in_channels,out_channels,kernel_size=2,strides=2):
+        super(deconv2d_bn,self).__init__()
+        self.conv1 = nn.ConvTranspose2d(in_channels,out_channels,
+                                        kernel_size = kernel_size,
+                                       stride = strides,bias=True)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        
+    def forward(self,x):
+        out = F.relu(self.bn1(self.conv1(x)))
+        return out
 class GradientReversalLayer(torch.nn.Module):
     def __init__(self):
         super(GradientReversalLayer, self).__init__()
