@@ -6,13 +6,76 @@ from .ce_labelSmooth import CrossEntropyLabelSmooth as CE_LS
 from torch.nn.modules.loss import CrossEntropyLoss
 import random
 import torch
+import torchvision
 feat_dim_dict = {
     'local_attention_vit': 768,
     'vit': 768,
     'resnet18': 512,
     'resnet34': 512
 }
-
+def build_seg_loss(cfg):
+    def loss_fn(seg_info,cid,pid):
+        seg_map=seg_info['seg_map']   #feature map  b,h,w,768
+        seg_mask=seg_info['seg_mask'] # pseudo gt b,h,w
+        
+        seg_prob=seg_info['seg_prob'].permute(0,2,3,1) # output_prob b,h,w,nb_sem+1
+        b,h,w,c=seg_prob.shape
+        loss_list=[]
+        ##local consistency
+        local_loss_list=[]
+        for i in [-1,0,1]:
+            for j in [-1,0-1]:
+                if i==j and  i==0 : continue
+                aff=torchvision.transforms.functional.affine(seg_map,0,[i,j], scale=1, shear=0)
+                diff=torch.functional.norm(seg_map-aff,dim=3).mean()
+                local_loss_list.append(diff)
+        LOCAL_LOSS=torch.stack(local_loss_list).mean()
+        
+        ##semantic_consistency
+        sem_cons_loss=CrossEntropyLoss()
+        sem_cons_loss_list=[]
+        for i in range(seg_map.shape[0]):
+            for j in range(seg_map.shape[0]):
+                if i==j: continue
+                elif pid[i]==pid[j]:
+                    
+                    p_gt=seg_mask[i,::].reshape(-1)
+                    logit=seg_prob[j,::]
+                    logit=logit.reshape(-1,logit.shape[-1])
+                    # print(logit.shape)
+                    sem_cons_loss_list.append(sem_cons_loss(logit,p_gt))
+        
+        SEG_COS_LOSS=torch.stack(sem_cons_loss_list).mean()
+        ##background grouping
+        background_loss_list=[]
+        for i in range(seg_map.shape[0]):
+            for j in range(seg_map.shape[0]):
+                if i==j: continue
+                elif cid[i]==cid[j]:
+                    loss=torch.functional.norm(seg_map[i,::]-seg_map[j,::],dim=2).mean()
+                    background_loss_list.append(loss)
+        BACK_GRU_LOSS=torch.stack(background_loss_list).mean()
+        
+        
+        
+        ##background determined
+        background_det_list=[]
+        background_det_loss=CrossEntropyLoss()
+        
+        det_list=[seg_prob[:,0,:,:], seg_prob[:,:,0,:],seg_prob[:,-1,:,:],seg_prob[:,:,-1,:]]
+        for i in det_list:
+            gt=torch.zeros((int(i.shape[0]*i.shape[1])) ).long().cuda()
+            background_det_list.append(background_det_loss(i.reshape(-1,c),gt))
+        # det_list=[seg_prob[:,8,:,:], seg_prob[:,:,8,:],seg_prob[:,-8,:,:],seg_prob[:,:,-8,:]]
+        # for i in det_list:
+        #     gt=torch.ones((int(i.shape[0]*i.shape[1])) ).long().cuda()
+        #     background_det_list.append(background_det_loss(i.reshape(-1,c),gt))
+        BACK_DET_LOSS=torch.stack(background_det_list).mean()*0
+        
+        
+        return (SEG_COS_LOSS+LOCAL_LOSS+BACK_GRU_LOSS+BACK_DET_LOSS)*0.1
+    return loss_fn
+        
 def build_loss(cfg, num_classes,nb_domain):
     name = cfg.MODEL.NAME
     

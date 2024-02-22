@@ -1,13 +1,17 @@
 import logging
 import os
 import random
+import numpy as np
 # from threading import local
 from model.backbones.vit_pytorch import deit_tiny_patch16_224_TransReID, part_attention_deit_small, part_attention_deit_tiny, part_attention_vit_base, part_attention_vit_base_p32, part_attention_vit_large, part_attention_vit_small, vit_base_patch32_224_TransReID, vit_large_patch16_224_TransReID
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .backbones.transformer import TransformerDecoder,TransformerDecoderLayer
+from .backbones.transformer import TransformerDecoder, TransformerDecoderLayer
 from .backbones.resnet import BasicBlock, ResNet, Bottleneck
+from random import randint
+from PIL import Image
+import PIL
 from .backbones import vit_base_patch16_224_TransReID, vit_small_patch16_224_TransReID, deit_small_patch16_224_TransReID
 # from train import nb_domain
 # from train import nb_domain
@@ -22,12 +26,13 @@ lup_path_name = {
 imagenet_path_name = {
     'vit_large_patch16_224_TransReID': 'jx_vit_large_p16_224-4ee7a4dc.pth',
     'vit_base_patch16_224_TransReID': 'jx_vit_base_p16_224-80ecf9dd.pth',
-    'vit_base_patch32_224_TransReID': 'jx_vit_base_patch32_224_in21k-8db57226.pth', 
+    'vit_base_patch32_224_TransReID': 'jx_vit_base_patch32_224_in21k-8db57226.pth',
     'deit_base_patch16_224_TransReID': 'deit_base_distilled_patch16_224-df68dfff.pth',
     'vit_small_patch16_224_TransReID': 'vit_small_p16_224-15ec54c9.pth',
     'deit_small_patch16_224_TransReID': 'deit_small_distilled_patch16_224-649709d9.pth',
     'deit_tiny_patch16_224_TransReID': 'deit_tiny_distilled_patch16_224-b40b3cf7.pth'
 }
+
 
 def weights_init_kaiming(m):
     classname = m.__class__.__name__
@@ -44,6 +49,7 @@ def weights_init_kaiming(m):
             nn.init.constant_(m.weight, 1.0)
             nn.init.constant_(m.bias, 0.0)
 
+
 def weights_init_classifier(m):
     classname = m.__class__.__name__
     if classname.find('Linear') != -1:
@@ -53,6 +59,7 @@ def weights_init_classifier(m):
 
 
 class Backbone(nn.Module):
+
     def __init__(self, model_name, num_classes, cfg):
         super(Backbone, self).__init__()
         last_stride = cfg.MODEL.LAST_STRIDE
@@ -66,8 +73,8 @@ class Backbone(nn.Module):
         self.in_planes = 2048
         if model_name == 'resnet18':
             self.in_planes = 512
-            self.base = ResNet(last_stride=last_stride, 
-                               block=BasicBlock, 
+            self.base = ResNet(last_stride=last_stride,
+                               block=BasicBlock,
                                layers=[2, 2, 2, 2])
             model_path = os.path.join(model_path_base, \
                 "resnet18-f37072fd.pth")
@@ -89,13 +96,13 @@ class Backbone(nn.Module):
             print('using resnet50 as a backbone')
         elif model_name == 'resnet101':
             self.base = ResNet(last_stride=last_stride,
-                               block=Bottleneck, 
+                               block=Bottleneck,
                                layers=[3, 4, 23, 3])
             model_path = os.path.join(model_path_base, \
                 "resnet101-63fe2227.pth")
             print('using resnet101 as a backbone')
         elif model_name == 'resnet152':
-            self.base = ResNet(last_stride=last_stride, 
+            self.base = ResNet(last_stride=last_stride,
                                block=Bottleneck,
                                layers=[3, 8, 36, 3])
             model_path = os.path.join(model_path_base, \
@@ -121,7 +128,7 @@ class Backbone(nn.Module):
         self.bottleneck.apply(weights_init_kaiming)
 
     def forward(self, x, label=None):  # label is unused if self.cos_layer == 'no'
-        x = self.base(x) # B, C, h, w
+        x = self.base(x)  # B, C, h, w
         
         global_feat = nn.functional.avg_pool2d(x, x.shape[2:4])
         global_feat = global_feat.view(global_feat.shape[0], -1)  # flatten to (bs, 2048)
@@ -149,7 +156,7 @@ class Backbone(nn.Module):
         if 'state_dict' in param_dict:
             param_dict = param_dict['state_dict']
         for i in param_dict:
-            if 'classifier' in i: # drop classifier
+            if 'classifier' in i:  # drop classifier
                 continue
             self.state_dict()[i].copy_(param_dict[i])
         print('Loading pretrained model from {}'.format(trained_path))
@@ -163,10 +170,11 @@ class Backbone(nn.Module):
     def compute_num_params(self):
         total = sum([param.nelement() for param in self.parameters()])
         logger = logging.getLogger('PAT.train')
-        logger.info("Number of parameter: %.2fM" % (total/1e6))
+        logger.info("Number of parameter: %.2fM" % (total / 1e6))
 
 
 class build_vit(nn.Module):
+
     def __init__(self, num_classes, cfg, factory):
         super(build_vit, self).__init__()
         self.cfg = cfg
@@ -188,7 +196,7 @@ class build_vit(nn.Module):
             (img_size=cfg.INPUT.SIZE_TRAIN,
             stride_size=cfg.MODEL.STRIDE_SIZE,
             drop_path_rate=cfg.MODEL.DROP_PATH,
-            drop_rate= cfg.MODEL.DROP_OUT,
+            drop_rate=cfg.MODEL.DROP_OUT,
             attn_drop_rate=cfg.MODEL.ATT_DROP_RATE)
         if cfg.MODEL.TRANSFORMER_TYPE == 'deit_small_patch16_224_TransReID':
             self.in_planes = 384
@@ -207,8 +215,8 @@ class build_vit(nn.Module):
         self.bottleneck.apply(weights_init_kaiming)
 
     def forward(self, x):
-        x = self.base(x) # B, N, C
-        global_feat = x[:, 0] # cls token for global feature
+        x = self.base(x)  # B, N, C
+        global_feat = x[:, 0]  # cls token for global feature
 
         feat = self.bottleneck(global_feat)
 
@@ -221,7 +229,7 @@ class build_vit(nn.Module):
     def load_param(self, trained_path):
         param_dict = torch.load(trained_path)
         for i in param_dict:
-            if 'classifier' in i: # drop classifier
+            if 'classifier' in i:  # drop classifier
                 continue
             if 'bottleneck' in i:
                 continue
@@ -237,12 +245,15 @@ class build_vit(nn.Module):
     def compute_num_params(self):
         total = sum([param.nelement() for param in self.parameters()])
         logger = logging.getLogger('PAT.train')
-        logger.info("Number of parameter: %.2fM" % (total/1e6))
+        logger.info("Number of parameter: %.2fM" % (total / 1e6))
 
 '''
 part attention vit
 '''
+
+
 class build_part_attention_vit(nn.Module):
+
     def __init__(self, num_classes, cfg, factory, pretrain_tag='imagenet'):
         super().__init__()
         self.cfg = cfg
@@ -268,7 +279,7 @@ class build_part_attention_vit(nn.Module):
             (img_size=cfg.INPUT.SIZE_TRAIN,
             stride_size=cfg.MODEL.STRIDE_SIZE,
             drop_path_rate=cfg.MODEL.DROP_PATH,
-            drop_rate= cfg.MODEL.DROP_OUT,
+            drop_rate=cfg.MODEL.DROP_OUT,
             attn_drop_rate=cfg.MODEL.ATT_DROP_RATE,
             pretrain_tag=pretrain_tag)
         if cfg.MODEL.TRANSFORMER_TYPE == 'deit_small_patch16_224_TransReID':
@@ -288,11 +299,11 @@ class build_part_attention_vit(nn.Module):
         self.classifier.apply(weights_init_classifier)
 
     def forward(self, x):
-        layerwise_tokens = self.base(x) # B, N, C
-        layerwise_cls_tokens = [t[:, 0] for t in layerwise_tokens] # cls token
-        part_feat_list = layerwise_tokens[-1][:, 1: 4] # 3, 768
+        layerwise_tokens = self.base(x)  # B, N, C
+        layerwise_cls_tokens = [t[:, 0] for t in layerwise_tokens]  # cls token
+        part_feat_list = layerwise_tokens[-1][:, 1: 4]  # 3, 768
 
-        layerwise_part_tokens = [[t[:, i] for i in range(1,4)] for t in layerwise_tokens] # 12 3 768
+        layerwise_part_tokens = [[t[:, i] for i in range(1, 4)] for t in layerwise_tokens]  # 12 3 768
         feat = self.bottleneck(layerwise_cls_tokens[-1])
 
         if self.training:
@@ -304,7 +315,7 @@ class build_part_attention_vit(nn.Module):
     def load_param(self, trained_path):
         param_dict = torch.load(trained_path)
         for i in param_dict:
-            if 'classifier' in i: # drop classifier
+            if 'classifier' in i:  # drop classifier
                 continue
             self.state_dict()[i.replace('module.', '')].copy_(param_dict[i])
         print('Loading trained model from {}'.format(trained_path))
@@ -318,10 +329,12 @@ class build_part_attention_vit(nn.Module):
     def compute_num_params(self):
         total = sum([param.nelement() for param in self.parameters()])
         logger = logging.getLogger('PAT.train')
-        logger.info("Number of parameter: %.2fM" % (total/1e6))        
+        logger.info("Number of parameter: %.2fM" % (total / 1e6))        
 ####CTC reid##333333333333
 
+
 class build_ctc_vit(nn.Module):
+
     def __init__(self, num_classes, cfg, factory, pretrain_tag='imagenet', nb_domain=None):
         super().__init__()
         self.cfg = cfg
@@ -336,20 +349,20 @@ class build_ctc_vit(nn.Module):
         self.neck = cfg.MODEL.NECK
         self.neck_feat = cfg.TEST.NECK_FEAT
         self.in_planes = 768
-        self.nb_sem=cfg.MODEL.NB_SEM
+        self.nb_sem = cfg.MODEL.NB_SEM
         print('using Transformer_type: part token vit as a backbone')
 
         self.gap = nn.AdaptiveAvgPool2d(1)
 
         self.num_classes = num_classes
-        self.input_shape=cfg.INPUT.SIZE_TRAIN
-        self.input_H=self.input_shape[0]
-        self.input_W=self.input_shape[1]
+        self.input_shape = cfg.INPUT.SIZE_TRAIN
+        self.input_H = self.input_shape[0]
+        self.input_W = self.input_shape[1]
         self.base = factory[cfg.MODEL.TRANSFORMER_TYPE]\
             (img_size=cfg.INPUT.SIZE_TRAIN,
             stride_size=cfg.MODEL.STRIDE_SIZE,
             drop_path_rate=cfg.MODEL.DROP_PATH,
-            drop_rate= cfg.MODEL.DROP_OUT,
+            drop_rate=cfg.MODEL.DROP_OUT,
             attn_drop_rate=cfg.MODEL.ATT_DROP_RATE,
             pretrain_tag=pretrain_tag)
         if cfg.MODEL.TRANSFORMER_TYPE == 'deit_small_patch16_224_TransReID':
@@ -361,70 +374,136 @@ class build_ctc_vit(nn.Module):
         if self.pretrain_choice == 'imagenet':
             self.base.load_param(self.model_path)
             print('Loading pretrained ImageNet model......from {}'.format(self.model_path))
-
+        self.nb_query = self.nb_sem + 2  # # classification(0)  and part_cls query(1:nb_sem-1) and seg query (nb_sem-1)
         self.bottleneck = nn.BatchNorm1d(self.in_planes)
         self.bottleneck.bias.requires_grad_(False)
         self.bottleneck.apply(weights_init_kaiming)
         self.classifier = nn.Linear(self.in_planes, self.num_classes, bias=False)
-        self.part_classifier=nn.Linear(self.in_planes, self.num_classes, bias=False)
+        self.part_classifier = nn.Linear(self.in_planes, self.num_classes, bias=False)
         self.classifier.apply(weights_init_classifier)
-        self.grl=GradientReversalLayer()
-        self.D_classifier= nn.Linear(self.in_planes, nb_domain, bias=False)
-        self.DecoderLayer=TransformerDecoderLayer(d_model= self.in_planes,nhead=8)
-        self.Decoder=TransformerDecoder(self.DecoderLayer,num_layers=6)
-        self.sem_query=     nn.Embedding(self.nb_sem, self.in_planes)
-        self.segmenter=nn.Sequential(nn.Linear(self.in_planes,int(cfg.INPUT.SIZE_TRAIN[0] /2* \
-                                                                                                    cfg.INPUT.SIZE_TRAIN[1]/2)),
+        self.grl = GradientReversalLayer()
+        self.D_classifier = nn.Linear(self.in_planes, nb_domain, bias=False)
+        self.DecoderLayer = TransformerDecoderLayer(d_model=self.in_planes, nhead=8)
+        self.Decoder = TransformerDecoder(self.DecoderLayer, num_layers=6)
+        self.part_cls_query = nn.Parameter(torch.zeros(1, self.nb_sem, self.in_planes))
+        self.cls_query = nn.Parameter(torch.zeros(1, 1, self.in_planes))
+        self.seg_query = nn.Parameter(torch.zeros(1, 1, self.in_planes))
+        
+        self.seg_transform = nn.Sequential(nn.Linear(self.in_planes, int(cfg.INPUT.SIZE_TRAIN[0] / 2 * \
+                                                                                                    cfg.INPUT.SIZE_TRAIN[1] / 2)),
                                                                     
                                    )
-        self.part_classify_token=nn.Parameter(torch.zeros(1, 1, self.in_planes))
-        self.upsample=nn.Sequential(deconv2d_bn(64,32),
-                                    deconv2d_bn(32,16),
-                                    deconv2d_bn(16,4),
-                                    deconv2d_bn(4,1))
+        self.part_classify_token = nn.Parameter(torch.zeros(1, 1, self.in_planes))  # not used
+        self.upsample = nn.Sequential(deconv2d_bn(int(self.in_planes*2), int(self.in_planes )),
+                                    deconv2d_bn(int(self.in_planes ), int(self.in_planes/2 )),
+                                    deconv2d_bn(int(self.in_planes /2), int(self.in_planes / 4)),
+                                    deconv2d_bn(int(self.in_planes / 4), int(self.in_planes /4))  )# # background
+        self.cls_seg=nn.Conv2d(int(self.in_planes *2),int(self.nb_sem+1),1,1)
+        self.save_t=0
     def forward(self, x):
-        b,c,h,w=x.shape
-        layerwise_tokens = self.base(x) # B, N, C   64,132,768
-        layerwise_cls_tokens =layerwise_tokens[:, 0] # cls token
-        encoder_out=layerwise_tokens[:,1:]   #without classification output
+        b, c, h, w = x.shape
+        layerwise_tokens = self.base(x)  # B, N, C   64,132,768
+        # layerwise_cls_tokens =layerwise_tokens[:, 0] # cls token
+        encoder_out = layerwise_tokens  # without classification output
+        
         # part_feat_list = layerwise_tokens[-1][:, 1: 4] # 3, 768
         
-        sem_query=torch.unsqueeze(self.sem_query.weight, 0).repeat(b,1,1)
-        tgt_mask=self.generate_tgt_mask (sem_query)
-        decoder_out=self.Decoder(sem_query,encoder_out,tgt_mask=tgt_mask)
-        # segmentation=self.segmenter(decoder_out) # 64,5,128(X)     64,5,512
-        segmentation=self.segmenter(decoder_out).view(b*self.nb_sem,int(self.input_H/16),int(self.input_W/16),-1).permute(0,3,1,2) #   32,3,16,8,64
-        segmentation=self.upsample(segmentation).view(b,self.nb_sem,-1,self.input_H,self.input_W).permute(0,1,3,4,2)
-        segmentation=torch.squeeze(segmentation)
-        # print(segmentation.shape )
-        segmentation=nn.functional.sigmoid(segmentation)
-        feat = self.bottleneck(layerwise_cls_tokens)
+        seg_query = self.seg_query.repeat(b, 1, 1)
+        cls_query = self.cls_query.repeat(b, 1, 1)
+        part_cls_query = self.part_cls_query.repeat(b, 1, 1)
+        
+        mem_H = int(self.input_H / self.cfg.MODEL.STRIDE_SIZE[0])
+        mem_W = int(self.input_W / self.cfg.MODEL.STRIDE_SIZE[1])
+        
+        first_query = torch.cat((seg_query, cls_query), dim=1)  # b,2,768
+        tgt_mask = self.generate_tgt_mask (first_query)
+        first_out = self.Decoder(first_query, encoder_out, tgt_mask=tgt_mask)
+        cls_out = first_out[:, -1,:]
+        layerwise_cls_tokens = cls_out
+        # cls_score=self.classifier(cls_out)
+        
+        # print(segmentation.shape)
+            # print(layerwise_part_tokens)
+
+        feat = self.bottleneck(cls_out)
 
         if self.training:
-            layerwise_part_tokens = [self.base(x,segmentation[:,i,:])[:,0] for i in range(self.nb_sem)]  # 12 3 768
             
+            seg_out = torch.unsqueeze(first_out[:, 0,:], dim=1)  # b,1,inplane
+            seg_out = seg_out.repeat(1, int(mem_H * mem_W), 1)
+            
+            feature_map_shape = (b, mem_H, mem_W, self.in_planes)
+            
+            seg_out = seg_out.reshape(feature_map_shape)
+            feature_map = layerwise_tokens.reshape(feature_map_shape)
+            feature_map = torch.cat((feature_map, seg_out),dim=3).permute(0, 3, 1, 2)
+            
+            # seg_map = self.upsample(feature_map)
+            seg_map=feature_map
+            seg_prob=self.cls_seg(seg_map)
+            seg_mask = torch.argmax(seg_prob, dim=1).detach()
+            segmentation = [(seg_mask == i) for i in range( self.nb_sem + 1)]  # [32,256,128]*3
+            segmentation_pic=segmentation
+            segmentation=segmentation[1:]
+            segmentation = torch.stack(segmentation, dim=1).reshape(-1,int( self.input_H/16),int( self.input_W/16))
+            
+            stacked_x = torch.unsqueeze(x, dim=1).repeat(1, self.nb_sem, 1, 1, 1).reshape(-1, 3, self.input_H, self.input_W)
+            part_encoder_shape = (b, self.nb_sem, mem_H, mem_W, self.in_planes)
+            part_encoder_out = self.base(stacked_x, segmentation)  # .reshape(part_encoder_shape)  # 32*3,16,8,768
+            
+            sec_query = part_cls_query.repeat(3, 1, 1)  # 32*3,3,768
+            tgt_mask = self.generate_tgt_mask (sec_query)
+            sec_out = self.Decoder(sec_query, part_encoder_out, tgt_mask=tgt_mask).reshape(b, self.nb_sem, self.nb_sem, self.in_planes)  # 32,3,3,768
+            part_feat_list=[sec_out[:, i, i,:] for i in range(self.nb_sem)]
+            layerwise_part_tokens = torch.stack([sec_out[:, i, i,:] for i in range(self.nb_sem)]       , dim=1)  # 32,3,768
+
             cls_score = self.classifier(feat)
-            grl_feat=self.grl(feat)
-            d_score=self.D_classifier(grl_feat)
-            part_cls_score=[self.part_classifier(layerwise_part_tokens[i]) for i in range(self.nb_sem)]
-            return cls_score, layerwise_cls_tokens, layerwise_part_tokens,d_score,segmentation,part_cls_score
+            grl_feat = self.grl(feat)
+            d_score = self.D_classifier(grl_feat)
+            part_cls_score = [self.part_classifier(layerwise_part_tokens[:, i,:]) for i in range(self.nb_sem)]
+            seg_info = {
+                'seg_map':seg_map,
+                'seg_mask':seg_mask,
+                'seg_prob' : seg_prob
+            }
+            
+            if randint(0,100)==1:
+                for i in range(self.nb_sem+1):
+                    seg_masks =segmentation_pic[i][0,::].cpu().detach().numpy().astype(np.int16)   ##fix!!
+                    seg_masks*= 255
+                    seg_masks =np.uint8(seg_masks)
+                    seg_masks= np.stack([seg_masks,seg_masks,seg_masks],axis=-1) 
+                    
+                    image = Image.fromarray(seg_masks)
+                    image.save(os.path.join('exp',f"seg_masks{i}_saved{self.save_t}.png"))
+                self.save_t+=1
+                input=x[0,::].permute(1,2,0).cpu().detach().numpy()
+                input= (input-np.min(input))/(np.max(input)-np.min(input))*255
+                input = np.uint8(input)
+                image = Image.fromarray(input)
+                image.save(f"seg_img.png")
+                print('saved img')
+            return cls_score, layerwise_cls_tokens, part_feat_list, d_score, seg_info, part_cls_score
         else:
             return feat if self.neck_feat == 'after' else layerwise_cls_tokens
 
     def load_param(self, trained_path):
         param_dict = torch.load(trained_path)
         for i in param_dict:
-            if 'classifier' in i: # drop classifier
+            if 'classifier' in i:  # drop classifier
                 continue
             self.state_dict()[i.replace('module.', '')].copy_(param_dict[i])
         print('Loading trained model from {}'.format(trained_path))
-    def generate_tgt_mask(self,tgt):
-        b,seq_len,c=tgt.shape
-        mask=torch.ones((seq_len,seq_len)).cuda()
-        mask=mask.fill_diagonal_(0)
+
+    def generate_tgt_mask(self, tgt):
+        b, seq_len, c = tgt.shape
+        mask = torch.ones((seq_len, seq_len)).bool().cuda()
+        mask = mask.fill_diagonal_(0)
+        mask
         # mask=torch.unsqueeze(mask,0)
         # mask=mask.repeat(b,1,1)
         return mask
+
     def load_param_finetune(self, model_path):
         param_dict = torch.load(model_path)
         for i in param_dict:
@@ -434,9 +513,10 @@ class build_ctc_vit(nn.Module):
     def compute_num_params(self):
         total = sum([param.nelement() for param in self.parameters()])
         logger = logging.getLogger('PAT.train')
-        logger.info("Number of parameter: %.2fM" % (total/1e6))       
+        logger.info("Number of parameter: %.2fM" % (total / 1e6))       
         
 #################
+
 
 __factory_T_type = {
     'vit_large_patch16_224_TransReID': vit_large_patch16_224_TransReID,
@@ -457,36 +537,45 @@ __factory_LAT_type = {
     'deit_small_patch16_224_TransReID': part_attention_deit_small,
     'deit_tiny_patch16_224_TransReID': part_attention_deit_tiny,
 }
+
+
 class GradientReversalfunc(torch.autograd.Function):
+
     @staticmethod
     def forward(ctx, input):
         return input
 
-
     @staticmethod
     def backward(ctx, grad_output):
-        return - grad_output
+        return -grad_output
+
+
 class deconv2d_bn(nn.Module):
-    def __init__(self,in_channels,out_channels,kernel_size=2,strides=2):
-        super(deconv2d_bn,self).__init__()
-        self.conv1 = nn.ConvTranspose2d(in_channels,out_channels,
-                                        kernel_size = kernel_size,
-                                       stride = strides,bias=True)
-        self.bn1 = nn.BatchNorm2d(out_channels)
+
+    def __init__(self, in_channels, out_channels, kernel_size=2, strides=2):
+        super(deconv2d_bn, self).__init__()
+        self.conv1 = nn.ConvTranspose2d(in_channels, out_channels,
+                                        kernel_size=kernel_size,
+                                       stride=strides, bias=True)
+        # self.bn1 = nn.BatchNorm2d(out_channels)
         
-    def forward(self,x):
-        out = F.relu(self.bn1(self.conv1(x)))
+    def forward(self, x):
+        out = F.leaky_relu(self.conv1(x),0.1)
         return out
+
+
 class GradientReversalLayer(torch.nn.Module):
+
     def __init__(self):
         super(GradientReversalLayer, self).__init__()
 
-
     def forward(self, x):
         return GradientReversalfunc.apply(x)
-def make_model(cfg, modelname, num_class, sd_flag=False, head_flag=False, camera_num=None, view_num=None,nb_domain=None):
+
+
+def make_model(cfg, modelname, num_class, sd_flag=False, head_flag=False, camera_num=None, view_num=None, nb_domain=None):
     if modelname == 'ctc_vit':
-        model = build_ctc_vit(num_class, cfg, __factory_LAT_type,nb_domain=nb_domain)
+        model = build_ctc_vit(num_class, cfg, __factory_LAT_type, nb_domain=nb_domain)
         print('===========building ctc_vit===========')
     elif modelname == 'part_attention_vit':
         model = build_part_attention_vit(num_class, cfg, __factory_LAT_type)
@@ -494,6 +583,6 @@ def make_model(cfg, modelname, num_class, sd_flag=False, head_flag=False, camera
     else:
         model = Backbone(modelname, num_class, cfg)
         print('===========building ResNet===========')
-    ### count params
+    # ## count params
     model.compute_num_params()
     return model

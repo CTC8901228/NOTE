@@ -29,6 +29,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import collections.abc as container_abcs
+
 int_classes = int
 string_classes = str
 
@@ -585,7 +586,7 @@ class part_Attention_ViT(nn.Module):
         # self.patch_embed.proj.weight.requires_grad = False
         # self.patch_embed.proj.bias.requires_grad = False
 
-        num_patches = self.patch_embed.num_patches + 1
+        num_patches = self.patch_embed.num_patches 
         self.num_patches = num_patches
         self.num_heads = num_heads
 
@@ -658,23 +659,31 @@ class part_Attention_ViT(nn.Module):
     def forward_features(self, x,weight=None):
         B = x.shape[0]
         
-        if weight is not None:
+
             
-            weight=torch.unsqueeze(weight, 1).repeat(1,3,1,1)
-            x=torch.multiply(x, weight)
+            
         x = self.patch_embed(x)  #64,128,768
         # if weight is not None:
         #     weight=torch.unsqueeze(weight, 2).repeat(1,1,self.embed_dim)
         #     x=torch.multiply(x, weight)
-        cls_tokens = self.cls_token.expand(B, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
+        
+        
+        # cls_tokens = self.cls_token.expand(B, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
 
-        x = torch.cat((cls_tokens, x), dim=1)
-
-
+        # x = torch.cat((cls_tokens, x), dim=1)
+        c=x.shape[-1]
+        # print(x.shape)
+        
         x = x + self.pos_embed
         
+        if weight is not None:
+            weight=weight.reshape(B,-1)
+            weight=torch.unsqueeze(weight, 2).repeat(1,1,1,c)
+            
+            x=torch.multiply(x, weight)
+        # print(x.shape)
+        x=torch.squeeze(x)
         x = self.pos_drop(x)
-        
         layerwise_tokens = []
         mask = torch.ones([B, 1, self.num_patches, self.num_patches], device=x.device.type)
         # if self.training:
