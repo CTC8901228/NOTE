@@ -364,7 +364,8 @@ class build_ctc_vit(nn.Module):
             drop_path_rate=cfg.MODEL.DROP_PATH,
             drop_rate=cfg.MODEL.DROP_OUT,
             attn_drop_rate=cfg.MODEL.ATT_DROP_RATE,
-            pretrain_tag=pretrain_tag)
+            pretrain_tag=pretrain_tag,
+            cfg=cfg)
         if cfg.MODEL.TRANSFORMER_TYPE == 'deit_small_patch16_224_TransReID':
             self.in_planes = 384
         elif cfg.MODEL.TRANSFORMER_TYPE == 'deit_tiny_patch16_224_TransReID':
@@ -383,22 +384,23 @@ class build_ctc_vit(nn.Module):
         self.classifier.apply(weights_init_classifier)
         self.grl = GradientReversalLayer()
         self.D_classifier = nn.Linear(self.in_planes, nb_domain, bias=False)
-        self.DecoderLayer = TransformerDecoderLayer(d_model=self.in_planes, nhead=8)
-        self.Decoder = TransformerDecoder(self.DecoderLayer, num_layers=6)
+        # self.DecoderLayer = TransformerDecoderLayer(d_model=self.in_planes, nhead=8)
+        # self.Decoder = TransformerDecoder(self.DecoderLayer, num_layers=6)
+        self.part_classify_token = nn.Parameter(torch.zeros(1, 1, self.in_planes))  # not used
         self.part_cls_query = nn.Parameter(torch.zeros(1, self.nb_sem, self.in_planes))
         self.cls_query = nn.Parameter(torch.zeros(1, 1, self.in_planes))
         self.seg_query = nn.Parameter(torch.zeros(1, 1, self.in_planes))
         
-        self.seg_transform = nn.Sequential(nn.Linear(self.in_planes, int(cfg.INPUT.SIZE_TRAIN[0] / 2 * \
-                                                                                                    cfg.INPUT.SIZE_TRAIN[1] / 2)),
+        # self.seg_transform = nn.Sequential(nn.Linear(self.in_planes, int(cfg.INPUT.SIZE_TRAIN[0] / 2 * \
+        #                                                                                             cfg.INPUT.SIZE_TRAIN[1] / 2)),
                                                                     
-                                   )
+        #                            )
         self.part_classify_token = nn.Parameter(torch.zeros(1, 1, self.in_planes))  # not used
-        self.upsample = nn.Sequential(deconv2d_bn(int(self.in_planes*2), int(self.in_planes )),
-                                    deconv2d_bn(int(self.in_planes ), int(self.in_planes/2 )),
-                                    deconv2d_bn(int(self.in_planes /2), int(self.in_planes / 4)),
-                                    deconv2d_bn(int(self.in_planes / 4), int(self.in_planes /4))  )# # background
-        self.cls_seg=nn.Conv2d(int(self.in_planes *2),int(self.nb_sem+1),1,1)
+        # self.upsample = nn.Sequential(deconv2d_bn(int(self.in_planes),256),
+        #                             deconv2d_bn(256,256),
+        #                             deconv2d_bn(256,256),
+        #                             deconv2d_bn(256,256))
+        self.cls_seg=nn.Conv2d(self.in_planes ,int(self.nb_sem+1),1,1)
         self.save_t=0
     def forward(self, x):
         b, c, h, w = x.shape
@@ -408,17 +410,17 @@ class build_ctc_vit(nn.Module):
         
         # part_feat_list = layerwise_tokens[-1][:, 1: 4] # 3, 768
         
-        seg_query = self.seg_query.repeat(b, 1, 1)
-        cls_query = self.cls_query.repeat(b, 1, 1)
+        # seg_query = self.seg_query.repeat(b, 1, 1)
+        # cls_query = self.cls_query.repeat(b, 1, 1)
         part_cls_query = self.part_cls_query.repeat(b, 1, 1)
         
         mem_H = int(self.input_H / self.cfg.MODEL.STRIDE_SIZE[0])
         mem_W = int(self.input_W / self.cfg.MODEL.STRIDE_SIZE[1])
         
-        first_query = torch.cat((seg_query, cls_query), dim=1)  # b,2,768
-        tgt_mask = self.generate_tgt_mask (first_query)
-        first_out = self.Decoder(first_query, encoder_out, tgt_mask=tgt_mask)
-        cls_out = first_out[:, -1,:]
+        # # first_query = torch.cat((seg_query, cls_query), dim=1)  # b,2,768
+        # tgt_mask = self.generate_tgt_mask (first_query)
+        # first_out = self.Decoder(first_query, encoder_out, tgt_mask=tgt_mask)
+        cls_out = encoder_out[:, -1,:]
         layerwise_cls_tokens = cls_out
         # cls_score=self.classifier(cls_out)
         
@@ -429,14 +431,16 @@ class build_ctc_vit(nn.Module):
 
         if self.training:
             
-            seg_out = torch.unsqueeze(first_out[:, 0,:], dim=1)  # b,1,inplane
-            seg_out = seg_out.repeat(1, int(mem_H * mem_W), 1)
+            # seg_out = torch.unsqueeze(first_out[:, 0,:], dim=1)  # b,1,inplane
+            # seg_out = seg_out.repeat(1, int(mem_H * mem_W), 1)
             
             feature_map_shape = (b, mem_H, mem_W, self.in_planes)
             
-            seg_out = seg_out.reshape(feature_map_shape)
-            feature_map = layerwise_tokens.reshape(feature_map_shape)
-            feature_map = torch.cat((feature_map, seg_out),dim=3).permute(0, 3, 1, 2)
+            # seg_out = seg_out.reshape(feature_map_shape)
+            feature_map = layerwise_tokens[:,1:,:].reshape(feature_map_shape)
+            # feature_map = torch.cat((feature_map, seg_out),dim=3).permute(0, 3, 1, 2)
+            feature_map =feature_map.permute(0, 3, 1, 2)
+            # feature_map=self.upsample(feature_map)
             
             # seg_map = self.upsample(feature_map)
             seg_map=feature_map
@@ -449,33 +453,42 @@ class build_ctc_vit(nn.Module):
             
             stacked_x = torch.unsqueeze(x, dim=1).repeat(1, self.nb_sem, 1, 1, 1).reshape(-1, 3, self.input_H, self.input_W)
             part_encoder_shape = (b, self.nb_sem, mem_H, mem_W, self.in_planes)
-            part_encoder_out = self.base(stacked_x, segmentation)  # .reshape(part_encoder_shape)  # 32*3,16,8,768
+            part_encoder_out = self.base(stacked_x, segmentation) [:,:int(self.nb_sem+1),:] # .reshape(part_encoder_shape)  # 32*3,16,8,768
             
-            sec_query = part_cls_query.repeat(3, 1, 1)  # 32*3,3,768
-            tgt_mask = self.generate_tgt_mask (sec_query)
-            sec_out = self.Decoder(sec_query, part_encoder_out, tgt_mask=tgt_mask).reshape(b, self.nb_sem, self.nb_sem, self.in_planes)  # 32,3,3,768
-            part_feat_list=[sec_out[:, i, i,:] for i in range(self.nb_sem)]
-            layerwise_part_tokens = torch.stack([sec_out[:, i, i,:] for i in range(self.nb_sem)]       , dim=1)  # 32,3,768
+            # sec_out = self.Decoder(sec_query, part_encoder_out, tgt_mask=tgt_mask).reshape(b, self.nb_sem, self.nb_sem, self.in_planes)  # 32,3,3,768
+            part_feat_list=[part_encoder_out[:, i,:] for i in range(1,self.nb_sem+1)]
+            layerwise_part_tokens = part_feat_list   #torch.stack([sec_out[:, i, i,:] for i in range(self.nb_sem)]       , dim=1)  # 32,3,768
 
             cls_score = self.classifier(feat)
             grl_feat = self.grl(feat)
             d_score = self.D_classifier(grl_feat)
-            part_cls_score = [self.part_classifier(layerwise_part_tokens[:, i,:]) for i in range(self.nb_sem)]
+            part_cls_score = [self.part_classifier(layerwise_part_tokens[i]) for i in range(1,self.nb_sem)]
             seg_info = {
                 'seg_map':seg_map,
                 'seg_mask':seg_mask,
                 'seg_prob' : seg_prob
             }
             
-            if randint(0,100)==1:
+            if randint(0,500)==1:
                 for i in range(self.nb_sem+1):
-                    seg_masks =segmentation_pic[i][0,::].cpu().detach().numpy().astype(np.int16)   ##fix!!
+                    # seg_masks =segmentation_pic[i][0,::].cpu().detach().numpy().astype(np.int16)   
+                    seg_masks =segmentation_pic[i][0,::].cpu().detach().numpy().astype(np.int16)   ##
                     seg_masks*= 255
                     seg_masks =np.uint8(seg_masks)
                     seg_masks= np.stack([seg_masks,seg_masks,seg_masks],axis=-1) 
                     
                     image = Image.fromarray(seg_masks)
                     image.save(os.path.join('exp',f"seg_masks{i}_saved{self.save_t}.png"))
+                norm=torch.functional.norm(seg_map[0,::].permute(1,2,0), dim=2).cpu().detach().numpy()
+                # print(norm.shape)    16,8
+                norm=(norm-np.min(norm))/(np.max(norm)-np.min(norm)  )*255
+                
+                norm =np.uint8(norm)
+                
+                norm= np.stack([norm,norm,norm],axis=-1) 
+                image = Image.fromarray(norm)
+                
+                image.save(os.path.join('exp',f"norm{0}_saved{self.save_t}.png"))
                 self.save_t+=1
                 input=x[0,::].permute(1,2,0).cpu().detach().numpy()
                 input= (input-np.min(input))/(np.max(input)-np.min(input))*255
