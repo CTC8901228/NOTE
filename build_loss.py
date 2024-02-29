@@ -8,7 +8,8 @@ import random
 import torch
 import torchvision
 from torch_kmeans  import KMeans
-
+import numpy as np
+from PIL import Image
 from torch_kmeans.utils.distances import (
     BaseDistance,
     CosineSimilarity,
@@ -64,41 +65,51 @@ def build_seg_loss(cfg):
             norm=torch.norm(same_id,dim=2)
             # print(norm.shape)
             
-            norm=torch.div(torch.subtract( norm,torch.mean(norm,dim=0)),torch.std(norm,dim=0)) .reshape(1,-1,1)
+            # norm=torch.div(torch.subtract( norm,torch.mean(norm,dim=0)),torch.std(norm,dim=0)) .reshape(-1,h*w,1)
             
-            outlier=torch.nonzero(norm>3)
-            if outlier.shape[0]>=300:
-                print(outlier.shape , 'in',norm.shape )
-            norm[norm>3]=3
-            norm=torch.cat((norm,norm),dim=2)
-            model = KMeans(n_clusters=2,distance=LpDistance,verbose=False)
-            result = model(norm)
-            centers=result.centers
-            labels=result.labels.reshape(-1)
+            # outlier=torch.nonzero(norm>1)
+            # if outlier.shape[0]>=300:
+            #     print(outlier.shape , 'in',norm.shape )
+            # norm[norm>1]=1
+            # norm=torch.cat((norm,norm),dim=2)
+            # model = KMeans(n_clusters=2,distance=LpDistance,verbose=False)
+            # result = model(norm)
+            # centers=result.centers
+            
+            # labels=result.labels.reshape(-1)
+            # # print(result.labels.reshape(-1,h,w).shape)
+            # seg_masks =result.labels.reshape(-1,h,w)[0,:,:].cpu().detach().numpy().astype(np.int16)   ##
+            # seg_masks*= 255
+            # seg_masks =np.uint8(seg_masks)
+            # seg_masks= np.stack([seg_masks,seg_masks,seg_masks],axis=-1) 
+            
+            # image = Image.fromarray(seg_masks)
+            # image.save(os.path.join('exp',f"label{0}_saved{4}.png"))
+            
             # print(centers.shape)
             # cluster_ids_x, cluster_centers = kmeans(
             # X=torch.norm(same_id.reshape(-1,depth),dim=1).reshape(-1,1), num_clusters=2, distance='euclidean', device='cpu',tol=0.0001)
-            ##seperate bg fg
-            bg_id=int(centers[0,1,1]<centers[0,0,0])
-            fg_id=int(centers[0,1,1]>=centers[0,0,0])
-            # print(same_prob.reshape(-1,c) [cluster_ids_x==bg_id])
-            ce_list.append(ce_loss(same_prob.reshape(-1,c) [labels==bg_id].cpu(),labels[labels==bg_id].cpu()))
+            # ##seperate bg fg
+            # bg_id=int(centers[0,1,1]<centers[0,0,0])
+            # fg_id=int(centers[0,1,1]>=centers[0,0,0])
+            # # print(same_prob.reshape(-1,c) [cluster_ids_x==bg_id])
+            # ce_list.append(ce_loss(same_prob.reshape(-1,c) [labels==bg_id].cpu(),labels[labels==bg_id].cpu()))
             
             
             
             #bg
-            fg_feature=same_id.reshape(-1,depth)[labels==fg_id]
-            fg_prob=same_prob.reshape(-1,c)[labels==fg_id]
-            fg_feature=torch.nn.functional.normalize(fg_feature, p=2, dim=1)
-            model = KMeans(n_clusters=c-1,dustance=CosineSimilarity)
+            # fg_feature=same_id.reshape(-1,depth)[labels==fg_id]
+            # fg_prob=same_prob.reshape(-1,c)[labels==fg_id]
+            fg_feature=torch.nn.functional.normalize(same_id.reshape(-1,depth), p=2, dim=1).reshape(1,-1,depth)
+            model = KMeans(n_clusters=c,distance=CosineSimilarity,verbose=False)
             # print(fg_feature.reshape(1,-1,depth).shape)
-            # labels = model.fit_predict(fg_feature.reshape(1,-1,depth))
-            
+            labels = model.fit_predict(fg_feature.reshape(1,-1,depth))
+            labels=labels.reshape(-1).cpu()
             # cluster_ids_x, cluster_centers = kmeans(
             # X=fg_feature.reshape(-1,depth), num_clusters=c-1, distance='cosine', device='cpu',tol=0.0001)
             #  ##we need to consist among all img
             
-            ce_list.append(ce_loss(fg_prob.reshape(-1,c) .cpu(),torch.ones(fg_prob.shape[0],dtype=torch.long)))
+            ce_list.append(ce_loss(same_prob.reshape(-1,c) .cpu(),labels))
             enablePrint()
             # tri_list.append(p_tri_loss(same_id.reshape(-1,depth).cuda(),cluster_ids_x.cuda()))
             
