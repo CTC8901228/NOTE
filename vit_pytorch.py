@@ -567,6 +567,7 @@ class part_Attention_ViT(nn.Module):
     def __init__(self, img_size=224, patch_size=16, stride_size=16, in_chans=3, num_classes=1000, embed_dim=768, depth=12,
                  num_heads=12, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop_rate=0., attn_drop_rate=0., drop_path_rate=0., hybrid_backbone=None, norm_layer=nn.LayerNorm, **kwargs):
         super().__init__()
+        self.cfg= kwargs['cfg'] 
         self.num_classes = num_classes
         self.num_features = self.embed_dim = embed_dim  # num_features for consistency with other models
         self.pretrain_tag = kwargs['pretrain_tag']
@@ -586,7 +587,7 @@ class part_Attention_ViT(nn.Module):
         # self.patch_embed.proj.weight.requires_grad = False
         # self.patch_embed.proj.bias.requires_grad = False
 
-        num_patches = self.patch_embed.num_patches 
+        num_patches = self.patch_embed.num_patches + self.cfg.MODEL.NB_SEM
         self.num_patches = num_patches
         self.num_heads = num_heads
 
@@ -594,6 +595,9 @@ class part_Attention_ViT(nn.Module):
         self.part_token1 = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.part_token2 = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.part_token3 = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        # self.part_classify_token = nn.Parameter(torch.zeros(1, 1, self.in_planes))  # not used
+        self.part_cls_query = nn.Parameter(torch.zeros(1, self. cfg.MODEL.NB_SEM, self.num_features))
+        
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim))
 
         print('using drop_out rate is : {}'.format(drop_rate))
@@ -663,29 +667,34 @@ class part_Attention_ViT(nn.Module):
             
             
         x = self.patch_embed(x)  #64,128,768
-        # if weight is not None:
-        #     weight=torch.unsqueeze(weight, 2).repeat(1,1,self.embed_dim)
-        #     x=torch.multiply(x, weight)
-        
-        
-        # cls_tokens = self.cls_token.expand(B, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
-
-        # x = torch.cat((cls_tokens, x), dim=1)
-        c=x.shape[-1]
-        # print(x.shape)
-        
-        x = x + self.pos_embed
-        
         if weight is not None:
-            weight=weight.reshape(B,-1)
-            weight=torch.unsqueeze(weight, 2).repeat(1,1,1,c)
+            part_cls_query=self.part_cls_query.repeat(B,1,1)
+            x=torch.cat((part_cls_query,x),dim=1)
+            # weight=torch.unsqueeze(weight, 2).repeat(1,1,self.embed_dim)
+            # x=torch.multiply(x, weight)
+        else:
+        
+            cls_tokens = self.cls_token.expand(B, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
+
+            x = torch.cat((cls_tokens, x), dim=1)
+        c=x.shape[-1]
+        seq_l=x.shape[1]
+        # print(x.shape)
+        if weight is not None:
+            x = x + self.pos_embed
+        else:
+            x = x + self.pos_embed[:,:-self.cfg.MODEL.NB_SEM+1,:]
+        # if weight is not None:
+        #     weight=weight.reshape(B,-1)
+        #     weight=torch.unsqueeze(weight, 2).repeat(1,1,1,c)
             
-            x=torch.multiply(x, weight)
+        #     x=torch.multiply(x, weight)
+      
         # print(x.shape)
         x=torch.squeeze(x)
         x = self.pos_drop(x)
         layerwise_tokens = []
-        mask = torch.ones([B, 1, self.num_patches, self.num_patches], device=x.device.type)
+        mask = torch.ones([B, 1, seq_l, seq_l], device=x.device.type)
         # if self.training:
             # mask[:, 0] = self.mask
         # for i in range(B):
@@ -693,8 +702,8 @@ class part_Attention_ViT(nn.Module):
         for blk in self.blocks:
             x = blk(x,mask)
             # layerwise_tokens.append(x)
-        layerwise_tokens =self.norm(x)
-        return layerwise_tokens
+        # layerwise_tokens =self.norm(x)
+        return x
 
     def forward(self, x,weight=None):
         x = self.forward_features(x,weight)
