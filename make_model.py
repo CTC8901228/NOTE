@@ -406,7 +406,7 @@ class build_ctc_vit(nn.Module):
         b, c, h, w = x.shape
         layerwise_tokens = self.base(x)  # B, N, C   64,132,768
         # layerwise_cls_tokens =layerwise_tokens[:, 0] # cls token
-        encoder_out = layerwise_tokens  # without classification output
+        encoder_out = layerwise_tokens[0]  # without classification output
         
         # part_feat_list = layerwise_tokens[-1][:, 1: 4] # 3, 768
         
@@ -437,7 +437,7 @@ class build_ctc_vit(nn.Module):
             feature_map_shape = (b, mem_H, mem_W, self.in_planes)
             
             # seg_out = seg_out.reshape(feature_map_shape)
-            feature_map = layerwise_tokens[:,1:,:].reshape(feature_map_shape)
+            feature_map = layerwise_tokens[1][:,1:,:].reshape(feature_map_shape)
             # feature_map = torch.cat((feature_map, seg_out),dim=3).permute(0, 3, 1, 2)
             feature_map =feature_map.permute(0, 3, 1, 2)
             # feature_map=self.upsample(feature_map)
@@ -453,7 +453,7 @@ class build_ctc_vit(nn.Module):
             
             stacked_x = torch.unsqueeze(x, dim=1).repeat(1, self.nb_sem, 1, 1, 1).reshape(-1, 3, self.input_H, self.input_W)
             part_encoder_shape = (b, self.nb_sem, mem_H, mem_W, self.in_planes)
-            part_encoder_out = self.base(stacked_x, segmentation) [:,:int(self.nb_sem+1),:] # .reshape(part_encoder_shape)  # 32*3,16,8,768
+            part_encoder_out = self.base(stacked_x, segmentation)[0] [:,:int(self.nb_sem+1),:] # .reshape(part_encoder_shape)  # 32*3,16,8,768
             
             # sec_out = self.Decoder(sec_query, part_encoder_out, tgt_mask=tgt_mask).reshape(b, self.nb_sem, self.nb_sem, self.in_planes)  # 32,3,3,768
             part_feat_list=[part_encoder_out[:, i,:] for i in range(1,self.nb_sem+1)]
