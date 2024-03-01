@@ -400,7 +400,14 @@ class build_ctc_vit(nn.Module):
         #                             deconv2d_bn(256,256),
         #                             deconv2d_bn(256,256),
         #                             deconv2d_bn(256,256))
-        self.cls_seg=nn.Conv2d(self.in_planes ,int(self.nb_sem+1),1,1)
+        self.cls_seg=nn.Sequential(nn.Conv2d(self.in_planes ,int(256),1,1),
+                                                                nn.LeakyReLU(0.1),
+                                                                nn.Conv2d(256,int(256),1,1),
+                                                                nn.LeakyReLU(0.1),
+                                                                nn.Conv2d(256 ,int(self.nb_sem+1),1,1),
+                                             
+                                             
+                                   )
         self.save_t=0
     def forward(self, x):
         b, c, h, w = x.shape
@@ -443,8 +450,8 @@ class build_ctc_vit(nn.Module):
             # feature_map=self.upsample(feature_map)
             
             # seg_map = self.upsample(feature_map)
-            seg_map=feature_map
-            seg_prob=self.cls_seg(seg_map)
+            seg_map=feature_map.detach()
+            seg_prob=self.cls_seg(seg_map.detach())
             seg_mask = torch.argmax(seg_prob, dim=1).detach()
             segmentation = [(seg_mask == i) for i in range( self.nb_sem + 1)]  # [32,256,128]*3
             segmentation_pic=segmentation
