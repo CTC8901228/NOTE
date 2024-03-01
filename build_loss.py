@@ -18,6 +18,8 @@ from torch_kmeans.utils.distances import (
 )
 from .hard_tri_loss import HardTripletLoss
 import sys,os
+import matplotlib.pyplot as plt
+from sklearn import manifold, datasets
 def blockPrint():
     sys.stdout = open(os.devnull, 'w')
 
@@ -30,6 +32,79 @@ feat_dim_dict = {
     'resnet18': 512,
     'resnet34': 512
 }
+def cor_loss(cfg,seg_info,pid):
+    cor_list=[]
+    seg_map=seg_info['seg_map'] .permute(0,2,3,1)  #feature map  b,h,w,768
+    seg_mask=seg_info['seg_mask'] # pseudo gt b,h,w
+    seg_prob=seg_info['seg_prob'].permute(0,2,3,1) # output_prob b,h,w,nb_sem+1
+    b,h,w,c=seg_prob.shape
+    depth=seg_map.shape[-1]
+    
+    lambda_knn=cfg.MODEL.LAMBDA_KNN
+    lambda_self=cfg.MODEL.LAMBDA_SELF
+    lambda_ran=cfg.MODEL.LAMBDA_RAN
+    b_knn=cfg.MODEL.B_KNN
+    b_self=cfg.MODEL.B_SELF
+    b_ran=cfg.MODEL.B_RAN
+    
+    for i in range(b):
+        f_self=seg_map[i,::]
+        p_self=seg_prob[i,::]
+        p_i=pid[i]   #person i 
+        ##  sample same id
+        same_id_sample_list=[]
+        dif_id_sample_list=[]
+        
+        for j in range(b):
+            if i == j: continue
+            if pid[j]==  p_i:
+                same_id_sample_list.append(j)
+            else:
+                dif_id_sample_list.append(j)
+        
+        ##samepling
+        same_id=random.choice(same_id_sample_list)
+        dif_id=random.choice(dif_id_sample_list)
+        
+        f_knn=seg_map[same_id,::]
+        p_knn=seg_prob[same_id,::]
+        f_ran=seg_map[dif_id,::]
+        p_ran=seg_prob[dif_id,::]
+        
+        f_knn_norm=torch.nn.functional.normalize(f_knn,dim=2)
+        f_ran_norm=torch.nn.functional.normalize(f_self,dim=2)
+        f_self_norm=torch.nn.functional.normalize(f_ran,dim=2)
+        p_knn_norm=torch.nn.functional.normalize(p_knn,dim=2)
+        p_ran_norm=torch.nn.functional.normalize(p_ran,dim=2)
+        p_self_norm=torch.nn.functional.normalize(p_self,dim=2)
+        
+        
+        F_knn=torch.einsum('ijc,hwc->ijhw',f_self_norm, f_knn_norm)
+        F_self=torch.einsum('ijc,hwc->ijhw',f_self_norm, f_self_norm)
+        F_ran=torch.einsum('ijc,hwc->ijhw',f_self_norm, f_ran_norm)
+        S_knn=torch.einsum('ijc,hwc->ijhw',p_self_norm, p_knn_norm)
+        S_self=torch.einsum('ijc,hwc->ijhw',p_self_norm, p_self_norm)
+        S_ran=torch.einsum('ijc,hwc->ijhw',p_self_norm, p_ran_norm)
+        
+        F_sc_knn=F_knn-torch.mean(F_knn,dim=(2,3))
+        F_sc_self=F_knn-torch.mean(F_self,dim=(2,3))
+        F_sc_ran=F_knn-torch.mean(F_ran,dim=(2,3))
+        
+        S_knn[S_knn<0]=0
+        S_self[S_self<0]=0
+        S_ran[S_ran<0]=0
+        
+        knn_loss=-torch.sum(torch.multiply((F_sc_knn-b_knn),S_knn))
+        self_loss=-torch.sum(torch.multiply((F_sc_self-b_self),S_self))
+        ran_loss=-torch.sum(torch.multiply((F_sc_ran-b_ran),S_ran) )
+        
+        loss=knn_loss*lambda_knn+self_loss*lambda_self+ran_loss*lambda_ran
+        cor_list.append(loss)
+    return      torch.stack(cor_list).mean()  
+        
+        
+        
+    
 def build_seg_loss(cfg):
     def loss_fn(seg_info,cid,pid):
         seg_map=seg_info['seg_map'] .permute(0,2,3,1)  #feature map  b,h,w,768
@@ -39,81 +114,102 @@ def build_seg_loss(cfg):
         b,h,w,c=seg_prob.shape
         depth=seg_map.shape[-1]
         loss_list=[]
+        cd_loss=cor_loss(cfg,seg_info,pid)
         # p_tri_loss=HardTripletLoss()
-        ce_loss=CrossEntropyLoss()
-        ##setting pseudo gt
-        # print(torch.norm(seg_map,dim=3))
-        max_fc=0
-        done_pid=[]
-        tri_list=[]
-        ce_list=[]
-        for i in range(seg_map.shape[0]):
-            same_id_list=[]
-            same_prob_list=[]
-            if pid[i] in done_pid: continue
-            for j in range(seg_map.shape[0]):
-                # if i==j: continue
-                # if pid[i]==pid[j]:
-                    same_id_list.append(seg_map[j,::].cpu())
-                    same_prob_list.append(seg_prob[j,::].cpu())
-            # blockPrint()
-            done_pid.append(pid[i])
-            same_id=torch.cat(same_id_list,dim=0)
-            same_prob=torch.cat(same_prob_list,dim=0)
-            # print(torch.norm(same_id.reshape(-1,depth),dim=1).reshape(-1,1).shape)
-            # print(same_id.shape)
-            norm=torch.norm(same_id,dim=2)
-            # print(norm.shape)
+        # ce_loss=CrossEntropyLoss()
+        # ##setting pseudo gt
+        # # print(torch.norm(seg_map,dim=3))
+        # max_fc=0
+        # done_pid=[]
+        # tri_list=[]
+        # ce_list=[]
+        # for i in range(seg_map.shape[0]):
+        #     same_id_list=[]
+        #     same_prob_list=[]
+        #     id_list=[]
+        #     if pid[i] in done_pid: continue
+        #     for j in range(seg_map.shape[0]):
+        #         # if i==j: continue
+        #         # if pid[i]==pid[j]:
+        #             same_id_list.append(seg_map[j,::].cpu())
+        #             same_prob_list.append(seg_prob[j,::].cpu())
+                    
+        #             id_list.append(j)
+        #             if len(id_list)==2:
+        #                 break
+        #     # blockPrint()
+        #     done_pid.append(pid[i])
+        #     same_id=torch.cat(same_id_list,dim=0)
+        #     same_prob=torch.cat(same_prob_list,dim=0)
+        #     id_list=np.array(id_list).reshape(-1,1) .repeat(128,axis=1).reshape(-1)
+        #     id_list[id_list>np.mean(id_list)]=1
+        #     id_list[id_list!=1]=0
+        #     print(id_list)
             
-            # norm=torch.div(torch.subtract( norm,torch.mean(norm,dim=0)),torch.std(norm,dim=0)) .reshape(-1,h*w,1)
+        #     # print(torch.norm(same_id.reshape(-1,depth),dim=1).reshape(-1,1).shape)
+        #     # print(same_id.shape)
+        #     norm=torch.norm(same_id,dim=2)
+        #     # print(norm.shape)
+        #     tsne = manifold.TSNE(n_components=2, init='pca', random_state=501)
+        #     X_tsne = tsne.fit_transform(same_id.reshape(-1,depth).detach().cpu().numpy())
+        #     x_min, x_max = X_tsne.min(0), X_tsne.max(0)
+        #     X_norm = (X_tsne - x_min) / (x_max - x_min)  # 归一化
+        #     plt.figure(figsize=(8, 8))
+        #     for i in range(X_norm.shape[0]):
+        #         plt.text(X_norm[i, 0], X_norm[i, 1], 'o', color=plt.cm.Set1(id_list[i]), 
+        #                 fontdict={'weight': 'bold', 'size': 9})
+        #     plt.xticks([])
+        #     plt.yticks([])
+        #     plt.show()
+        #     # norm=torch.div(torch.subtract( norm,torch.mean(norm,dim=0)),torch.std(norm,dim=0)) .reshape(-1,h*w,1)
             
-            # outlier=torch.nonzero(norm>1)
-            # if outlier.shape[0]>=300:
-            #     print(outlier.shape , 'in',norm.shape )
-            # norm[norm>1]=1
-            # norm=torch.cat((norm,norm),dim=2)
-            # model = KMeans(n_clusters=2,distance=LpDistance,verbose=False)
-            # result = model(norm)
-            # centers=result.centers
+        #     # outlier=torch.nonzero(norm>1)
+        #     # if outlier.shape[0]>=300:
+        #     #     print(outlier.shape , 'in',norm.shape )
+        #     # norm[norm>1]=1
+        #     # norm=torch.cat((norm,norm),dim=2)
+        #     # model = KMeans(n_clusters=2,distance=LpDistance,verbose=False)
+        #     # result = model(norm)
+        #     # centers=result.centers
             
-            # labels=result.labels.reshape(-1)
-            # # print(result.labels.reshape(-1,h,w).shape)
-            # seg_masks =result.labels.reshape(-1,h,w)[0,:,:].cpu().detach().numpy().astype(np.int16)   ##
-            # seg_masks*= 255
-            # seg_masks =np.uint8(seg_masks)
-            # seg_masks= np.stack([seg_masks,seg_masks,seg_masks],axis=-1) 
+        #     # labels=result.labels.reshape(-1)
+        #     # # print(result.labels.reshape(-1,h,w).shape)
+        #     # seg_masks =result.labels.reshape(-1,h,w)[0,:,:].cpu().detach().numpy().astype(np.int16)   ##
+        #     # seg_masks*= 255
+        #     # seg_masks =np.uint8(seg_masks)
+        #     # seg_masks= np.stack([seg_masks,seg_masks,seg_masks],axis=-1) 
             
-            # image = Image.fromarray(seg_masks)
-            # image.save(os.path.join('exp',f"label{0}_saved{4}.png"))
+        #     # image = Image.fromarray(seg_masks)
+        #     # image.save(os.path.join('exp',f"label{0}_saved{4}.png"))
             
-            # print(centers.shape)
-            # cluster_ids_x, cluster_centers = kmeans(
-            # X=torch.norm(same_id.reshape(-1,depth),dim=1).reshape(-1,1), num_clusters=2, distance='euclidean', device='cpu',tol=0.0001)
-            # ##seperate bg fg
-            # bg_id=int(centers[0,1,1]<centers[0,0,0])
-            # fg_id=int(centers[0,1,1]>=centers[0,0,0])
-            # # print(same_prob.reshape(-1,c) [cluster_ids_x==bg_id])
-            # ce_list.append(ce_loss(same_prob.reshape(-1,c) [labels==bg_id].cpu(),labels[labels==bg_id].cpu()))
+        #     # print(centers.shape)
+        #     # cluster_ids_x, cluster_centers = kmeans(
+        #     # X=torch.norm(same_id.reshape(-1,depth),dim=1).reshape(-1,1), num_clusters=2, distance='euclidean', device='cpu',tol=0.0001)
+        #     # ##seperate bg fg
+        #     # bg_id=int(centers[0,1,1]<centers[0,0,0])
+        #     # fg_id=int(centers[0,1,1]>=centers[0,0,0])
+        #     # # print(same_prob.reshape(-1,c) [cluster_ids_x==bg_id])
+        #     # ce_list.append(ce_loss(same_prob.reshape(-1,c) [labels==bg_id].cpu(),labels[labels==bg_id].cpu()))
             
             
             
-            #bg
-            # fg_feature=same_id.reshape(-1,depth)[labels==fg_id]
-            # fg_prob=same_prob.reshape(-1,c)[labels==fg_id]
-            fg_feature=torch.nn.functional.normalize(same_id.reshape(-1,depth), p=2, dim=1).reshape(1,-1,depth)
-            model = KMeans(n_clusters=c,distance=CosineSimilarity,verbose=False)
-            # print(fg_feature.reshape(1,-1,depth).shape)
-            labels = model.fit_predict(fg_feature.reshape(1,-1,depth))
-            labels=labels.reshape(-1).cpu()
-            # cluster_ids_x, cluster_centers = kmeans(
-            # X=fg_feature.reshape(-1,depth), num_clusters=c-1, distance='cosine', device='cpu',tol=0.0001)
-            #  ##we need to consist among all img
+        #     #bg
+        #     # fg_feature=same_id.reshape(-1,depth)[labels==fg_id]
+        #     # fg_prob=same_prob.reshape(-1,c)[labels==fg_id]
+        #     fg_feature=torch.nn.functional.normalize(same_id.reshape(-1,depth), p=2, dim=1).reshape(1,-1,depth)
+        #     model = KMeans(n_clusters=c,distance=CosineSimilarity,verbose=False)
+        #     # print(fg_feature.reshape(1,-1,depth).shape)
+        #     labels = model.fit_predict(fg_feature.reshape(1,-1,depth))
+        #     labels=labels.reshape(-1).cpu()
+        #     # cluster_ids_x, cluster_centers = kmeans(
+        #     # X=fg_feature.reshape(-1,depth), num_clusters=c-1, distance='cosine', device='cpu',tol=0.0001)
+        #     #  ##we need to consist among all img
             
-            ce_list.append(ce_loss(same_prob.reshape(-1,c) .cpu(),labels))
-            enablePrint()
-            # tri_list.append(p_tri_loss(same_id.reshape(-1,depth).cuda(),cluster_ids_x.cuda()))
+        #     ce_list.append(ce_loss(same_prob.reshape(-1,c) .cpu(),labels))
+        #     enablePrint()
+        #     # tri_list.append(p_tri_loss(same_id.reshape(-1,depth).cuda(),cluster_ids_x.cuda()))
             
-        P_LOSS=torch.stack(ce_list,dim=0).mean().cpu()   #torch.stack(tri_list,dim=0).mean().cpu()+#hape(-1,depth).cpu(),cluster_ids_x.cpu())[0]
+        P_LOSS=cd_loss #torch.stack(ce_list,dim=0).mean().cpu()   #torch.stack(tri_list,dim=0).mean().cpu()+#hape(-1,depth).cpu(),cluster_ids_x.cpu())[0]
         
         ##local consistency
         local_loss_list=[]
