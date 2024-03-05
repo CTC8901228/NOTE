@@ -77,7 +77,7 @@ def ctc_vit_model(cfg,
                 path = informations['img_path']
                 #input = input.view(-1, input.size(2), input.size(3), input.size(4))
                 t_domains = informations['others']['domains'].float()
-                score, layerwise_global_feat, layerwise_feat_list,d_score,segmentation ,part_cls_score= model(input)
+                segmentation = model(input,seg_train=True)
                 seg_loss=seg_loss_fn(segmentation,camid,target)
                 scaler.scale(seg_loss).backward()
 

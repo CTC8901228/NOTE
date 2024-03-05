@@ -702,8 +702,9 @@ class part_Attention_ViT(nn.Module):
         for blk in self.blocks:
             x = blk(x,mask)
             # layerwise_tokens.append(x)
-        # layerwise_tokens =self.norm(x)
-        return x
+        # layerwise_tokens =torch.stack(layerwise_tokens,dim=-1).mean(dim=-1)
+        # print(layerwise_tokens.shape)
+        return x #,layerwise_tokens
 
     def forward(self, x,weight=None):
         x = self.forward_features(x,weight)

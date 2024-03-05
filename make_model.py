@@ -12,14 +12,25 @@ from .backbones.resnet import BasicBlock, ResNet, Bottleneck
 from random import randint
 from PIL import Image
 import PIL
+import torchvision
+
+import matplotlib.pyplot as plt
+
 from .backbones import vit_base_patch16_224_TransReID, vit_small_patch16_224_TransReID, deit_small_patch16_224_TransReID
 # from train import nb_domain
 # from train import nb_domain
-
+from torch_kmeans import KMeans
+from torch_kmeans.utils.distances import (
+    BaseDistance,
+    CosineSimilarity,
+    DotProductSimilarity,
+    LpDistance,
+)
 # alter this to your pre-trained file name
 lup_path_name = {
     'vit_base_patch16_224_TransReID': 'vit_base_ics_cfs_lup.pth',
     'vit_small_patch16_224_TransReID': 'vit_base_ics_cfs_lup.pth',
+    'deit_nase': 'deit_base_distilled_patch16_224-df68dfff.pth'
 }
 
 # alter this to your pre-trained file name
@@ -30,6 +41,8 @@ imagenet_path_name = {
     'deit_base_patch16_224_TransReID': 'deit_base_distilled_patch16_224-df68dfff.pth',
     'vit_small_patch16_224_TransReID': 'vit_small_p16_224-15ec54c9.pth',
     'deit_small_patch16_224_TransReID': 'deit_small_distilled_patch16_224-649709d9.pth',
+    'deit_ase': 'deit_base_distilled_patch16_224-df68dfff.pth',
+    
     'deit_tiny_patch16_224_TransReID': 'deit_tiny_distilled_patch16_224-b40b3cf7.pth'
 }
 
@@ -400,34 +413,128 @@ class build_ctc_vit(nn.Module):
         #                             deconv2d_bn(256,256),
         #                             deconv2d_bn(256,256),
         #                             deconv2d_bn(256,256))
-        self.cls_seg=nn.Sequential(nn.Conv2d(self.in_planes ,int(256),1,1),
+        self.prob_depth=self.nb_sem+1
+        self.dd=nn.Sequential(
+                                                                nn.Conv2d(self.in_planes,int(256),1,1),
                                                                 nn.LeakyReLU(0.1),
-                                                                nn.Conv2d(256,int(256),1,1),
-                                                                nn.LeakyReLU(0.1),
-                                                                nn.Conv2d(256 ,int(self.nb_sem+1),1,1),
+                                                                nn.BatchNorm2d(256 ),
+                                                                
+                                                                
+                                                 
+                                                                
                                              
                                              
                                    )
+        self.cls_seg=nn.Sequential(
+                                                    nn.Conv2d(self.in_planes,int(256),1,1),
+                                                                nn.LeakyReLU(0.1),
+                                                                nn.BatchNorm2d(256 ),
+                                                                
+                                                                nn.Conv2d(256,int(256),1,1),
+                                                                nn.LeakyReLU(0.1),
+                                                                nn.BatchNorm2d(256 ),
+                                                                
+                                                                nn.Conv2d(256 ,int(self.prob_depth),1,1),
+                                                 
+                                                                
+                                             
+                                             
+                                   )
+        self.random_imgclass_list=os.listdir(os.path.join('data/datasets/Linnaeus/train'))
         self.save_t=0
-    def forward(self, x):
+        self.kmean=KMeans(distance=CosineSimilarity,n_clusters=self.nb_sem+1,verbose=False)
+        self.p_transform=[torchvision.transforms.ColorJitter(0.5,0,0,0),
+                                torchvision.transforms.ColorJitter(0.,0.5,0,0),
+                            torchvision.transforms.ColorJitter(0,0,0.5,0),
+                            torchvision.transforms.ColorJitter(0,0,0,0.5),
+                          torchvision.transforms.GaussianBlur(5),
+                          torchvision.transforms.Grayscale(3)]
+        self.g_transform=[torchvision.transforms.transforms.F.crop,
+                          torchvision.transforms.transforms.F.hflip]
+        self.resize=torchvision.transforms.Resize((cfg.INPUT.SIZE_TRAIN[0],cfg.INPUT.SIZE_TRAIN[1]))
+        self.resize_mem=torchvision.transforms.Resize((cfg.INPUT.SIZE_TRAIN[0]//16,cfg.INPUT.SIZE_TRAIN[1]//16))
+        
+    def forward(self, x,seg_train=False):
         b, c, h, w = x.shape
+        mem_H = int(self.input_H / self.cfg.MODEL.STRIDE_SIZE[0])
+        mem_W = int(self.input_W / self.cfg.MODEL.STRIDE_SIZE[1])
+        feature_map_shape = (b, mem_H, mem_W, self.in_planes)
+        if seg_train:
+            p_transform1=random.choice(self.p_transform)
+            p_transform2=random.choice(self.p_transform)
+            g_transform=random.choice(self.g_transform)
+            if 'crop' in str(g_transform):
+                crop_arg=(random.randint(0,h//2),random.randint(0,w//2),random.randint(h//4,h//2),random.randint(h//4,w//2))
+            else:
+                pass                
+            p1=p_transform1(x)
+            p2=p_transform2(x)
+            p1 = self.base(p1)[:,1:,:].reshape(feature_map_shape).permute(0, 3, 1, 2)
+            if 'crop' in str(g_transform):
+                p2 = g_transform(p2,*crop_arg)
+                p2=self.resize(p2)
+                p1 = g_transform(p1,*crop_arg)
+                p1=self.resize_mem(p1)
+                
+                
+            else:
+                p2 = g_transform(p2)
+                p1 = g_transform(p1)
+                
+            p2 = self.base(p2)[:,1:,:].reshape(feature_map_shape).permute(0, 3, 1, 2)
+            
+            p1_logit=self.cls_seg(p1).permute(0, 2,3,1)
+            p2_logit=self.cls_seg(p2).permute(0, 2,3,1)
+            # p1_kmean=KMeans(distance=CosineSimilarity,n_clusters=self.nb_sem+1,verbose=False)
+            # p2_kmean=KMeans(distance=CosineSimilarity,n_clusters=self.nb_sem+1,verbose=False)
+            p1_result=self.kmean(p1.reshape(b,-1,self.in_planes).detach())
+            p2_result=self.kmean(p2.reshape(b,-1,self.in_planes).detach())
+            p1_plabel=p1_result.labels
+            p2_plabel=p2_result.labels
+            p1_centroid=p1_result.centers
+            p2_centroid=p1_result.centers
+            if randint(0,300)==1:
+                color_map=np.array([[255,0,0],[0,255,0],[0,0,255],[255,255,0],[0,255,255]])
+                image = np.zeros((256, 128, 3), dtype=np.uint8)
+                seg_mask=torch.argmax(p1_logit, dim=3).detach()
+                for i in range(256):
+                    for j in range(128):
+                        color_index = seg_mask[0][int(i/16),int(j/16)] # Subtract 1 because indices start from 0
+                        image[i, j] = color_map[color_index]
+                input=x[0,::].permute(1,2,0).cpu().detach().numpy()
+                input= (input-np.min(input))/(np.max(input)-np.min(input))*255
+                image=image*0.2+input*0.8
+                # plt.imshow(image)
+                image = np.uint8(image)
+                image = Image.fromarray(image)
+                image.save(os.path.join('exp_2',f"saved{self.save_t}.png"))
+                self.save_t+=1
+                print('saved img')
+            return {
+                'p1_map':p1,
+                'p2_map':p2,
+                'p1_logit':p1_logit,
+                    'p2_logit':p2_logit,
+                    'p1_plabel':p1_plabel,
+                    'p2_plabel':p2_plabel,
+                    'p1_centroid':p1_centroid,
+                    'p2_centroid':p2_centroid
+                    }
         layerwise_tokens = self.base(x)  # B, N, C   64,132,768
         # layerwise_cls_tokens =layerwise_tokens[:, 0] # cls token
         encoder_out = layerwise_tokens[0]  # without classification output
         
-        # part_feat_list = layerwise_tokens[-1][:, 1: 4] # 3, 768
         
         # seg_query = self.seg_query.repeat(b, 1, 1)
         # cls_query = self.cls_query.repeat(b, 1, 1)
         part_cls_query = self.part_cls_query.repeat(b, 1, 1)
         
-        mem_H = int(self.input_H / self.cfg.MODEL.STRIDE_SIZE[0])
-        mem_W = int(self.input_W / self.cfg.MODEL.STRIDE_SIZE[1])
+        
         
         # # first_query = torch.cat((seg_query, cls_query), dim=1)  # b,2,768
         # tgt_mask = self.generate_tgt_mask (first_query)
         # first_out = self.Decoder(first_query, encoder_out, tgt_mask=tgt_mask)
-        cls_out = encoder_out[:, -1,:]
+        cls_out = encoder_out[:, 0,:]
         layerwise_cls_tokens = cls_out
         # cls_score=self.classifier(cls_out)
         
@@ -444,15 +551,18 @@ class build_ctc_vit(nn.Module):
             feature_map_shape = (b, mem_H, mem_W, self.in_planes)
             
             # seg_out = seg_out.reshape(feature_map_shape)
-            feature_map = layerwise_tokens[1][:,1:,:].reshape(feature_map_shape)
+            feature_map = layerwise_tokens[0][:,1:,:].reshape(feature_map_shape)
             # feature_map = torch.cat((feature_map, seg_out),dim=3).permute(0, 3, 1, 2)
-            feature_map =feature_map.permute(0, 3, 1, 2)
+            feature_map =feature_map.permute(0, 3, 1, 2).detach()
             # feature_map=self.upsample(feature_map)
             
-            # seg_map = self.upsample(feature_map)
-            seg_map=feature_map.detach()
-            seg_prob=self.cls_seg(seg_map.detach())
+            # feature_map = self.upsample(feature_map.detach())
+            seg_map=feature_map
+            seg_prob=self.cls_seg(seg_map)
+            seg_model=self.kmean
+            # seg_mask=seg_model.fit_predict(seg_prob.reshape(b,-1,self.prob_depth).detach().cpu()).cuda().reshape(b,mem_H,mem_W).detach()
             seg_mask = torch.argmax(seg_prob, dim=1).detach()
+            # print(seg_mask)
             segmentation = [(seg_mask == i) for i in range( self.nb_sem + 1)]  # [32,256,128]*3
             segmentation_pic=segmentation
             segmentation=segmentation[1:]
@@ -470,39 +580,85 @@ class build_ctc_vit(nn.Module):
             grl_feat = self.grl(feat)
             d_score = self.D_classifier(grl_feat)
             part_cls_score = [self.part_classifier(layerwise_part_tokens[i]) for i in range(1,self.nb_sem)]
+            
+            ###randon img reading
+            # ran_imgclass=random.choice(self.random_imgclass_list)
+            # ran_img_list=os.listdir(os.path.join('data/datasets/Linnaeus/train',ran_imgclass))
+            # ran_img=random.sample(ran_img_list,b)
+            # ran_list=[]
+            # for i in ran_img:
+            #     ran_list.append(os.path.join('data/datasets/Linnaeus/train',ran_imgclass,i))
+            # ran_img_list=[]
+            # for img in ran_list:
+            #     ran_img=PIL.Image.open(img)
+            #     ran_img=ran_img.resize((h,w), resample=0) 
+            #     ran_img=torchvision.transforms.ToTensor()(ran_img).cuda().reshape(c,h,w)
+            #     ran_img_list.append(ran_img)
+                
+            # ran_input=torch.stack(ran_img_list,dim=0)
+            
+            # ran_img_tokens= self.base(ran_input)[0][:,1:,::]
+            
+            # ran_img_tokens=self.upsample(ran_img_tokens.detach())
+            
+            # ran_img_tokens=ran_img_tokens.reshape(b,h,w,256).permute(0, 3, 1, 2).detach()
+            # ran_img_prob=self.cls_seg(ran_img_tokens)
             seg_info = {
                 'seg_map':seg_map,
                 'seg_mask':seg_mask,
-                'seg_prob' : seg_prob
+                'seg_prob' : seg_prob,
+                'ran_img_map':seg_prob,
+                'ran_img_prob':seg_prob
             }
             
-            if randint(0,500)==1:
-                for i in range(self.nb_sem+1):
-                    # seg_masks =segmentation_pic[i][0,::].cpu().detach().numpy().astype(np.int16)   
-                    seg_masks =segmentation_pic[i][0,::].cpu().detach().numpy().astype(np.int16)   ##
-                    seg_masks*= 255
-                    seg_masks =np.uint8(seg_masks)
-                    seg_masks= np.stack([seg_masks,seg_masks,seg_masks],axis=-1) 
-                    
-                    image = Image.fromarray(seg_masks)
-                    image.save(os.path.join('exp',f"seg_masks{i}_saved{self.save_t}.png"))
-                norm=torch.functional.norm(seg_map[0,::].permute(1,2,0), dim=2).cpu().detach().numpy()
-                # print(norm.shape)    16,8
-                norm=(norm-np.min(norm))/(np.max(norm)-np.min(norm)  )*255
+            if randint(0,300)==1:
+                color_map=np.array([[255,0,0],[0,255,0],[0,0,255],[255,255,0],[0,255,255]])
+                image = np.zeros((256, 128, 3), dtype=np.uint8)
                 
-                norm =np.uint8(norm)
-                
-                norm= np.stack([norm,norm,norm],axis=-1) 
-                image = Image.fromarray(norm)
-                
-                image.save(os.path.join('exp',f"norm{0}_saved{self.save_t}.png"))
-                self.save_t+=1
+                for i in range(256):
+                    for j in range(128):
+                        color_index = seg_mask[0][int(i/16),int(j/16)] # Subtract 1 because indices start from 0
+                        image[i, j] = color_map[color_index]
                 input=x[0,::].permute(1,2,0).cpu().detach().numpy()
                 input= (input-np.min(input))/(np.max(input)-np.min(input))*255
-                input = np.uint8(input)
-                image = Image.fromarray(input)
-                image.save(f"seg_img.png")
+                image=image*0.2+input*0.8
+                # plt.imshow(image)
+                image = np.uint8(image)
+                image = Image.fromarray(image)
+                image.save(os.path.join('exp_2',f"saved{self.save_t}.png"))
+                self.save_t+=1
                 print('saved img')
+                
+                # for i in range(self.nb_sem+1):
+
+                    
+
+
+                #     # seg_masks =segmentation_pic[i][0,::].cpu().detach().numpy().astype(np.int16)   
+                #     seg_masks =segmentation_pic[i][0,::].cpu().detach().numpy().astype(np.int16)   ##
+                #     seg_masks*= 255
+                #     seg_masks =np.uint8(seg_masks)
+                #     seg_masks= np.stack([seg_masks,seg_masks,seg_masks],axis=-1) 
+                    
+                #     # image = Image.fromarray(seg_masks)
+                #     # image.save(os.path.join('exp',f"seg_masks{i}_saved{self.save_t}.png"))
+                # norm=torch.functional.norm(seg_map[0,::].permute(1,2,0), dim=2).cpu().detach().numpy()
+                # # print(norm.shape)    16,8
+                # norm=(norm-np.min(norm))/(np.max(norm)-np.min(norm)  )*255
+                
+                # norm =np.uint8(norm)
+                
+                # norm= np.stack([norm,norm,norm],axis=-1) 
+                # image = Image.fromarray(norm)
+                
+                # # image.save(os.path.join('exp',f"norm{0}_saved{self.save_t}.png"))
+                # self.save_t+=1
+                # input=x[0,::].permute(1,2,0).cpu().detach().numpy()
+                # input= (input-np.min(input))/(np.max(input)-np.min(input))*255
+                # input = np.uint8(input)
+                # image = Image.fromarray(input)
+                # # image.save(f"seg_img.png")
+                # print('saved img')
             return cls_score, layerwise_cls_tokens, part_feat_list, d_score, seg_info, part_cls_score
         else:
             return feat if self.neck_feat == 'after' else layerwise_cls_tokens
