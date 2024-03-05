@@ -22,7 +22,125 @@ import matplotlib.pyplot as plt
 from sklearn import manifold, datasets
 def blockPrint():
     sys.stdout = open(os.devnull, 'w')
+class InfoNCE(torch.nn.Module):
+    """
+    Calculates the InfoNCE loss for self-supervised learning.
+    This contrastive loss enforces the embeddings of similar (positive) samples to be close
+        and those of different (negative) samples to be distant.
+    A query embedding is compared with one positive key and with one or more negative keys.
 
+    References:
+        https://arxiv.org/abs/1807.03748v2
+        https://arxiv.org/abs/2010.05113
+
+    Args:
+        temperature: Logits are divided by temperature before calculating the cross entropy.
+        reduction: Reduction method applied to the output.
+            Value must be one of ['none', 'sum', 'mean'].
+            See torch.nn.functional.cross_entropy for more details about each option.
+        negative_mode: Determines how the (optional) negative_keys are handled.
+            Value must be one of ['paired', 'unpaired'].
+            If 'paired', then each query sample is paired with a number of negative keys.
+            Comparable to a triplet loss, but with multiple negatives per sample.
+            If 'unpaired', then the set of negative keys are all unrelated to any positive key.
+
+    Input shape:
+        query: (N, D) Tensor with query samples (e.g. embeddings of the input).
+        positive_key: (N, D) Tensor with positive samples (e.g. embeddings of augmented input).
+        negative_keys (optional): Tensor with negative samples (e.g. embeddings of other inputs)
+            If negative_mode = 'paired', then negative_keys is a (N, M, D) Tensor.
+            If negative_mode = 'unpaired', then negative_keys is a (M, D) Tensor.
+            If None, then the negative keys for a sample are the positive keys for the other samples.
+
+    Returns:
+         Value of the InfoNCE Loss.
+
+     Examples:
+        >>> loss = InfoNCE()
+        >>> batch_size, num_negative, embedding_size = 32, 48, 128
+        >>> query = torch.randn(batch_size, embedding_size)
+        >>> positive_key = torch.randn(batch_size, embedding_size)
+        >>> negative_keys = torch.randn(num_negative, embedding_size)
+        >>> output = loss(query, positive_key, negative_keys)
+    """
+
+    def __init__(self, temperature=0.1, reduction='mean', negative_mode='unpaired'):
+        super().__init__()
+        self.temperature = temperature
+        self.reduction = reduction
+        self.negative_mode = negative_mode
+
+    def forward(self, query, positive_key, negative_keys=None):
+        return info_nce(query, positive_key, negative_keys,
+                        temperature=self.temperature,
+                        reduction=self.reduction,
+                        negative_mode=self.negative_mode)
+
+
+def info_nce(query, positive_key, negative_keys=None, temperature=0.1, reduction='mean', negative_mode='unpaired'):
+    # Check input dimensionality.
+    if query.dim() != 2:
+        raise ValueError('<query> must have 2 dimensions.')
+    if positive_key.dim() != 2:
+        raise ValueError('<positive_key> must have 2 dimensions.')
+    if negative_keys is not None:
+        if negative_mode == 'unpaired' and negative_keys.dim() != 2:
+            raise ValueError("<negative_keys> must have 2 dimensions if <negative_mode> == 'unpaired'.")
+        if negative_mode == 'paired' and negative_keys.dim() != 3:
+            raise ValueError("<negative_keys> must have 3 dimensions if <negative_mode> == 'paired'.")
+
+    # Check matching number of samples.
+    if len(query) != len(positive_key):
+        raise ValueError('<query> and <positive_key> must must have the same number of samples.')
+    if negative_keys is not None:
+        if negative_mode == 'paired' and len(query) != len(negative_keys):
+            raise ValueError("If negative_mode == 'paired', then <negative_keys> must have the same number of samples as <query>.")
+
+    # Embedding vectors should have same number of components.
+    if query.shape[-1] != positive_key.shape[-1]:
+        raise ValueError('Vectors of <query> and <positive_key> should have the same number of components.')
+    if negative_keys is not None:
+        if query.shape[-1] != negative_keys.shape[-1]:
+            raise ValueError('Vectors of <query> and <negative_keys> should have the same number of components.')
+
+    # Normalize to unit vectors
+    query, positive_key, negative_keys = normalize(query, positive_key, negative_keys)
+    if negative_keys is not None:
+        # Explicit negative keys
+
+        # Cosine between positive pairs
+        positive_logit = torch.sum(query * positive_key, dim=1, keepdim=True)
+
+        if negative_mode == 'unpaired':
+            # Cosine between all query-negative combinations
+            negative_logits = query @ transpose(negative_keys)
+
+        elif negative_mode == 'paired':
+            query = query.unsqueeze(1)
+            negative_logits = query @ transpose(negative_keys)
+            negative_logits = negative_logits.squeeze(1)
+
+        # First index in last dimension are the positive samples
+        logits = torch.cat([positive_logit, negative_logits], dim=1)
+        labels = torch.zeros(len(logits), dtype=torch.long, device=query.device)
+    else:
+        # Negative keys are implicitly off-diagonal positive keys.
+
+        # Cosine between all combinations
+        logits = query @ transpose(positive_key)
+
+        # Positive keys are the entries on the diagonal
+        labels = torch.arange(len(query), device=query.device)
+
+    return F.cross_entropy(logits / temperature, labels, reduction=reduction)
+
+
+def transpose(x):
+    return x.transpose(-2, -1)
+
+
+def normalize(*xs):
+    return [None if x is None else F.normalize(x, dim=-1) for x in xs]
 # Restore
 def enablePrint():
     sys.stdout = sys.__stdout__
@@ -37,6 +155,9 @@ def cor_loss(cfg,seg_info,pid):
     seg_map=seg_info['seg_map'] .permute(0,2,3,1)  #feature map  b,h,w,768
     seg_mask=seg_info['seg_mask'] # pseudo gt b,h,w
     seg_prob=seg_info['seg_prob'].permute(0,2,3,1) # output_prob b,h,w,nb_sem+1
+    ran_map=seg_info['ran_img_map'] .permute(0,2,3,1)
+    ran_prob=seg_info['ran_img_prob'] .permute(0,2,3,1)
+    
     b,h,w,c=seg_prob.shape
     depth=seg_map.shape[-1]
     
@@ -63,22 +184,24 @@ def cor_loss(cfg,seg_info,pid):
                 dif_id_sample_list.append(j)
         
         ##samepling
-        same_id=random.choice(same_id_sample_list)
-        dif_id=random.choice(dif_id_sample_list)
+        same_id=random.choice(dif_id_sample_list)
+        dif_id=i
         
         f_knn=seg_map[same_id,::]
         p_knn=seg_prob[same_id,::]
-        f_ran=seg_map[dif_id,::]
-        p_ran=seg_prob[dif_id,::]
+        f_ran=ran_map[i,::]
+        p_ran=ran_prob[i,::]
         
         f_knn_norm=torch.nn.functional.normalize(f_knn,dim=2)
-        f_ran_norm=torch.nn.functional.normalize(f_self,dim=2)
-        f_self_norm=torch.nn.functional.normalize(f_ran,dim=2)
+        f_ran_norm=torch.nn.functional.normalize(f_ran,dim=2)
+        f_self_norm=torch.nn.functional.normalize(f_self,dim=2)
         p_knn_norm=torch.nn.functional.normalize(p_knn,dim=2)
         p_ran_norm=torch.nn.functional.normalize(p_ran,dim=2)
         p_self_norm=torch.nn.functional.normalize(p_self,dim=2)
         
-        
+        # print(f_self_norm.shape)
+        # print(f_knn_norm.shape)
+        # print(f_ran_norm.shape)
         F_knn=torch.einsum('ijc,hwc->ijhw',f_self_norm, f_knn_norm)
         F_self=torch.einsum('ijc,hwc->ijhw',f_self_norm, f_self_norm)
         F_ran=torch.einsum('ijc,hwc->ijhw',f_self_norm, f_ran_norm)
@@ -94,27 +217,72 @@ def cor_loss(cfg,seg_info,pid):
         S_self[S_self<0]=0
         S_ran[S_ran<0]=0
         
-        knn_loss=-torch.sum(torch.multiply((F_sc_knn-b_knn),S_knn))
-        self_loss=-torch.sum(torch.multiply((F_sc_self-b_self),S_self))
-        ran_loss=-torch.sum(torch.multiply((F_sc_ran-b_ran),S_ran) )
+        knn_loss=-torch.mean(torch.multiply((F_sc_knn-b_knn),S_knn))
+        self_loss=-torch.mean(torch.multiply((F_sc_self-b_self),S_self))
+        ran_loss=-torch.mean(torch.multiply((F_sc_ran-b_ran),S_ran) )
+        if random.randint(1,100)==500:
+            print(-torch.mean((torch.multiply((F_sc_knn-b_knn),S_knn))),-torch.mean(torch.multiply((F_sc_self-b_self),S_self)),-torch.mean(torch.multiply((F_sc_ran-b_ran),S_ran) ))
         
         loss=knn_loss*lambda_knn+self_loss*lambda_self+ran_loss*lambda_ran
         cor_list.append(loss)
     return      torch.stack(cor_list).mean()  
         
-        
-        
-    
+
+def cluster_loss(map,label,centroid):
+    b,h,w,c=map.shape
+    _,nb_sem,_=centroid.shape
+    cen=centroid.gather(dim=1,index=torch.unsqueeze(label,-1).expand(-1, -1, centroid.shape[2])  )
+    # print(centroid.shape) #b,4,768#
+    # print(label.shape)
+    # print(label)
+    # print(map.shape) #10,16,8,768
+    # print(cen)
+    D_cluster_list=[]
+    for i in range(nb_sem):
+        center_i=torch.unsqueeze(centroid[:,i,:],dim=1).repeat(1,h*w,1)
+        D_cluster_list.append(torch.exp(-torch.nn.functional.cosine_similarity(map.reshape(b,-1,c),center_i,dim=2)))
+    D_cluster_sum=torch.stack(D_cluster_list,dim=-1).sum(dim=-1)
+    # print(D_cluster_sum.shape)  10,128  ##sum of difference to every centroid
+    D_cluster_plabel=torch.exp(-torch.nn.functional.cosine_similarity(map.reshape(b,-1,c),cen,dim=2)) ## 10,128
+    loss=-torch.log(torch.divide(D_cluster_plabel,D_cluster_sum)).mean()
+    return loss
 def build_seg_loss(cfg):
     def loss_fn(seg_info,cid,pid):
-        seg_map=seg_info['seg_map'] .permute(0,2,3,1)  #feature map  b,h,w,768
-        seg_mask=seg_info['seg_mask'] # pseudo gt b,h,w
+        # seg_map=seg_info['seg_map'] .permute(0,2,3,1)  #feature map  b,h,w,768
+        # seg_mask=seg_info['seg_mask'] # pseudo gt b,h,w
         
-        seg_prob=seg_info['seg_prob'].permute(0,2,3,1) # output_prob b,h,w,nb_sem+1
-        b,h,w,c=seg_prob.shape
-        depth=seg_map.shape[-1]
+        # seg_prob=seg_info['seg_prob'].permute(0,2,3,1) # output_prob b,h,w,nb_sem+1
+        # ran_map=seg_info['ran_img_map'] .permute(0,2,3,1)
+        # ran_prob=seg_info['ran_img_prob'] .permute(0,2,3,1)
+        
+        p1_map=seg_info['p1_map'].permute(0,2,3,1)
+        p2_map=seg_info['p2_map'].permute(0,2,3,1)
+        p1_logit=seg_info['p1_logit']
+        p2_logit=seg_info['p2_logit']
+        p1_plabel=seg_info['p1_plabel']
+        p2_plabel=seg_info['p2_plabel']
+        p1_centroid=seg_info ['p1_centroid']
+        p2_centroid=seg_info ['p2_centroid']
+        
+        b,h,w,c=p1_logit.shape
+        
+        depth=p1_map.shape[-1]
         loss_list=[]
-        cd_loss=cor_loss(cfg,seg_info,pid)
+        L_r=InfoNCE()
+        for i in range(b):
+            info_nce_loss=(L_r(p1_logit[i,::].reshape(h*w,c),p2_logit[i,::].reshape(h*w,c)))
+            loss_list.append(info_nce_loss*0.5)
+        # print(p1_map.shape)
+        # print(p1_logit.shape)
+        loss_list.append(cluster_loss(p1_map,p1_plabel,p1_centroid))
+        
+        loss_list.append(cluster_loss(p2_map,p2_plabel,p2_centroid))
+        # print(cluster_loss(p2_map,p2_plabel,p2_centroid))
+        # print(info_nce_loss)
+        # print(p1_plabel.shape)
+        # print(p1_centroid.shape)
+        
+        # cd_loss=cor_loss(cfg,seg_info,pid)
         # p_tri_loss=HardTripletLoss()
         # ce_loss=CrossEntropyLoss()
         # ##setting pseudo gt
@@ -209,65 +377,65 @@ def build_seg_loss(cfg):
         #     enablePrint()
         #     # tri_list.append(p_tri_loss(same_id.reshape(-1,depth).cuda(),cluster_ids_x.cuda()))
             
-        P_LOSS=cd_loss #torch.stack(ce_list,dim=0).mean().cpu()   #torch.stack(tri_list,dim=0).mean().cpu()+#hape(-1,depth).cpu(),cluster_ids_x.cpu())[0]
+        # P_LOSS=0 #cd_loss*0 #torch.stack(ce_list,dim=0).mean().cpu()   #torch.stack(tri_list,dim=0).mean().cpu()+#hape(-1,depth).cpu(),cluster_ids_x.cpu())[0]
         
-        ##local consistency
-        local_loss_list=[]
-        for i in [-1,0,1]:
-            for j in [-1,0-1]:
-                if i==j and  i==0 : continue
-                aff=torchvision.transforms.functional.affine(seg_map,0,[i,j], scale=1, shear=0)
-                diff=torch.functional.norm(seg_map-aff,dim=3).mean()
-                local_loss_list.append(diff)
-        LOCAL_LOSS=torch.stack(local_loss_list).mean()*0
+        # ##local consistency
+        # local_loss_list=[]
+        # for i in [-1,0,1]:
+        #     for j in [-1,0-1]:
+        #         if i==j and  i==0 : continue
+        #         aff=torchvision.transforms.functional.affine(seg_map,0,[i,j], scale=1, shear=0)
+        #         diff=torch.functional.norm(seg_map-aff,dim=3).mean()
+        #         local_loss_list.append(diff)
+        # LOCAL_LOSS=torch.stack(local_loss_list).mean()*0
 
-        ##semantic_consistency
-        sem_cons_loss=CrossEntropyLoss()
-        sem_cons_loss_list=[]
-        for i in range(seg_map.shape[0]):
-            for j in range(seg_map.shape[0]):
-                if i==j: continue
-                elif pid[i]==pid[j]:
+        # ##semantic_consistency
+        # sem_cons_loss=CrossEntropyLoss()
+        # sem_cons_loss_list=[]
+        # for i in range(seg_map.shape[0]):
+        #     for j in range(seg_map.shape[0]):
+        #         if i==j: continue
+        #         elif pid[i]==pid[j]:
                     
-                    p_gt=seg_mask[i,::].reshape(-1)
-                    logit=seg_prob[j,::]
-                    logit=logit.reshape(-1,logit.shape[-1])
-                    # print(logit.shape)
-                    sem_cons_loss_list.append(sem_cons_loss(logit,p_gt))
+        #             p_gt=seg_mask[i,::].reshape(-1)
+        #             logit=seg_prob[i,::]
+        #             logit=logit.reshape(-1,logit.shape[-1])
+        #             # print(logit.shape)
+        #             sem_cons_loss_list.append(sem_cons_loss(logit,p_gt))
         
-        SEG_COS_LOSS=torch.stack(sem_cons_loss_list).mean()*0
-        ##background grouping
-        background_loss_list=[]
-        for i in range(seg_map.shape[0]):
-            for j in range(seg_map.shape[0]):
-                if i==j: continue
-                elif cid[i]==cid[j]:
-                    loss=torch.functional.norm(seg_map[i,::]-seg_map[j,::],dim=2).mean()
-                    background_loss_list.append(loss)
-        BACK_GRU_LOSS=torch.stack(background_loss_list).mean()*0
+        # SEG_COS_LOSS=torch.stack(sem_cons_loss_list).mean()*0
+        # ##background grouping
+        # background_loss_list=[]
+        # for i in range(seg_map.shape[0]):
+        #     for j in range(seg_map.shape[0]):
+        #         if i==j: continue
+        #         elif cid[i]==cid[j]:
+        #             loss=torch.functional.norm(seg_map[i,::]-seg_map[j,::],dim=2).mean()
+        #             background_loss_list.append(loss)
+        # BACK_GRU_LOSS=torch.stack(background_loss_list).mean()*0
         
         
         
-        ##background determined
-        background_det_list=[]
-        background_det_loss=CrossEntropyLoss()
+        # ##background determined
+        # background_det_list=[]
+        # background_det_loss=CrossEntropyLoss()
         
-        det_list=[seg_prob[:,0,:,:], seg_prob[:,:,0,:],seg_prob[:,-1,:,:],seg_prob[:,:,-1,:]]
-        for i in det_list:
-            gt=torch.zeros((int(i.shape[0]*i.shape[1])) ).long().cuda()
-            background_det_list.append(background_det_loss(i.reshape(-1,c),gt))
-        det_list=[seg_prob[:,2,:,:], seg_prob[:,:,2,:],seg_prob[:,-2,:,:],seg_prob[:,:,-2,:]]
-        for i in det_list:
-            gt=torch.ones((int(i.shape[0]*i.shape[1])) ).long().cuda()
-            background_det_list.append(background_det_loss(i.reshape(-1,c),gt))
-        # det_list=[seg_prob[:,8,:,:], seg_prob[:,:,8,:],seg_prob[:,-8,:,:],seg_prob[:,:,-8,:]]
+        # det_list=[seg_prob[:,0,:,:], seg_prob[:,:,0,:],seg_prob[:,-1,:,:],seg_prob[:,:,-1,:]]
+        # for i in det_list:
+        #     gt=torch.zeros((int(i.shape[0]*i.shape[1])) ).long().cuda()
+        #     background_det_list.append(background_det_loss(i.reshape(-1,c),gt))
+        # det_list=[seg_prob[:,2,:,:], seg_prob[:,:,2,:],seg_prob[:,-2,:,:],seg_prob[:,:,-2,:]]
         # for i in det_list:
         #     gt=torch.ones((int(i.shape[0]*i.shape[1])) ).long().cuda()
         #     background_det_list.append(background_det_loss(i.reshape(-1,c),gt))
-        BACK_DET_LOSS=torch.stack(background_det_list).mean()*0
+        # det_list=[seg_prob[:,6,:,:], seg_prob[:,:,6,:],seg_prob[:,-6,:,:],seg_prob[:,:,-6,:]]
+        # for i in det_list:
+        #     gt=torch.ones((int(i.shape[0]*i.shape[1])) ).long().cuda()
+        #     background_det_list.append(background_det_loss(i.reshape(-1,c),gt))
+        # BACK_DET_LOSS=torch.stack(background_det_list).mean()*20
         
         
-        return (SEG_COS_LOSS+LOCAL_LOSS+BACK_GRU_LOSS+BACK_DET_LOSS+P_LOSS)
+        return torch.stack(loss_list).mean()
     return loss_fn
         
 def build_loss(cfg, num_classes,nb_domain):
