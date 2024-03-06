@@ -273,7 +273,7 @@ def build_seg_loss(cfg):
         ce=CrossEntropyLoss()
         for i in range(b):
             info_nce_loss=(ce(p1_logit[i,::].reshape(h*w,c),p2_logit[i,::].reshape(h*w,c)))
-            InfoNCE_list.append(info_nce_loss/b)
+            InfoNCE_list.append(info_nce_loss)
         loss_list.append(torch.stack(InfoNCE_list).mean())
         # print(p1_map.shape)
         # print(p1_logit.shape)

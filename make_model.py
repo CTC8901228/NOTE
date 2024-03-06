@@ -442,7 +442,7 @@ class build_ctc_vit(nn.Module):
                                              
                                              
                                    )
-        self.random_imgclass_list=os.listdir(os.path.join('data/datasets/Linnaeus/train'))
+        # self.random_imgclass_list=os.listdir(os.path.join('data/datasets/Linnaeus/train'))
         self.save_t=0
         self.kmean=KMeans(distance=CosineSimilarity,n_clusters=self.nb_sem+1,verbose=False)
         self.p_transform=[torchvision.transforms.ColorJitter(0.5,0,0,0),
@@ -471,7 +471,7 @@ class build_ctc_vit(nn.Module):
                 pass                
             p1=p_transform1(x)
             p2=p_transform2(x)
-            p1 = self.base(p1)[:,1:,:].reshape(feature_map_shape).permute(0, 3, 1, 2)
+            p1 = self.base(p1)[1][:,1:,:].reshape(feature_map_shape).permute(0, 3, 1, 2)
             p1=self.upsample(p1)
             if 'crop' in str(g_transform):
                 p2 = g_transform(p2,*crop_arg)
@@ -484,11 +484,11 @@ class build_ctc_vit(nn.Module):
                 p2 = g_transform(p2)
                 p1 = g_transform(p1)
                 
-            p2 = self.base(p2)[:,1:,:].reshape(feature_map_shape).permute(0, 3, 1, 2)
+            p2 = self.base(p2)[1][:,1:,:].reshape(feature_map_shape).permute(0, 3, 1, 2)
             p2=self.upsample(p2)
             
-            p1_logit=self.cls_seg(p1).permute(0, 2,3,1)
-            p2_logit=self.cls_seg(p2).permute(0, 2,3,1)
+            p1_logit=torch.softmax(self.cls_seg(p1).permute(0, 2,3,1),dim=-1)
+            p2_logit=torch.softmax(self.cls_seg(p2).permute(0, 2,3,1),dim=-1)
             p1_kmean=KMeans(distance=CosineSimilarity,n_clusters=self.nb_sem+1,verbose=False)
             p2_kmean=KMeans(distance=CosineSimilarity,n_clusters=self.nb_sem+1,verbose=False)
             
@@ -508,7 +508,7 @@ class build_ctc_vit(nn.Module):
                         image[i, j] = color_map[color_index]
                 input=x[0,::].permute(1,2,0).cpu().detach().numpy()
                 input= (input-np.min(input))/(np.max(input)-np.min(input))*255
-                image=image*0.2+input*0.8
+                image=image*0.4+input*0.8
                 # plt.imshow(image)
                 image = np.uint8(image)
                 image = Image.fromarray(image)
@@ -525,7 +525,7 @@ class build_ctc_vit(nn.Module):
                     'p1_centroid':p1_centroid,
                     'p2_centroid':p2_centroid
                     }
-        layerwise_tokens = self.base(x)  # B, N, C   64,132,768
+        layerwise_tokens = self.base(x) [0] # B, N, C   64,132,768
         # layerwise_cls_tokens =layerwise_tokens[:, 0] # cls token
         encoder_out = layerwise_tokens[0]  # without classification output
         
