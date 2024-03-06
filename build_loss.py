@@ -16,7 +16,6 @@ from torch_kmeans.utils.distances import (
     DotProductSimilarity,
     LpDistance,
 )
-from .hard_tri_loss import HardTripletLoss
 import sys,os
 import matplotlib.pyplot as plt
 from sklearn import manifold, datasets
