@@ -409,10 +409,12 @@ class build_ctc_vit(nn.Module):
                                                                     
         #                            )
         self.part_classify_token = nn.Parameter(torch.zeros(1, 1, self.in_planes))  # not used
-        # self.upsample = nn.Sequential(deconv2d_bn(int(self.in_planes),256),
-        #                             deconv2d_bn(256,256),
-        #                             deconv2d_bn(256,256),
-        #                             deconv2d_bn(256,256))
+        self.kmean_c=16
+        
+        self.upsample = nn.Sequential(deconv2d_bn(int(self.in_planes),256),
+                                    deconv2d_bn(256,64),
+                                    deconv2d_bn(64,32),
+                                    deconv2d_bn(32, self.kmean_c))
         self.prob_depth=self.nb_sem+1
         self.dd=nn.Sequential(
                                                                 nn.Conv2d(self.in_planes,int(256),1,1),
@@ -426,15 +428,15 @@ class build_ctc_vit(nn.Module):
                                              
                                    )
         self.cls_seg=nn.Sequential(
-                                                    nn.Conv2d(self.in_planes,int(256),1,1),
+                                                    nn.Conv2d(self.kmean_c,int(self.prob_depth),1,1),
                                                                 nn.LeakyReLU(0.1),
-                                                                nn.BatchNorm2d(256 ),
+                                                                # nn.BatchNorm2d(256 ),
                                                                 
-                                                                nn.Conv2d(256,int(256),1,1),
-                                                                nn.LeakyReLU(0.1),
-                                                                nn.BatchNorm2d(256 ),
+                                                                # nn.Conv2d(256,int(256),1,1),
+                                                                # nn.LeakyReLU(0.1),
+                                                                # nn.BatchNorm2d(256 ),
                                                                 
-                                                                nn.Conv2d(256 ,int(self.prob_depth),1,1),
+                                                                # nn.Conv2d(256 ,int(self.prob_depth),1,1),
                                                  
                                                                 
                                              
@@ -470,11 +472,12 @@ class build_ctc_vit(nn.Module):
             p1=p_transform1(x)
             p2=p_transform2(x)
             p1 = self.base(p1)[:,1:,:].reshape(feature_map_shape).permute(0, 3, 1, 2)
+            p1=self.upsample(p1)
             if 'crop' in str(g_transform):
                 p2 = g_transform(p2,*crop_arg)
                 p2=self.resize(p2)
                 p1 = g_transform(p1,*crop_arg)
-                p1=self.resize_mem(p1)
+                p1=self.resize(p1)
                 
                 
             else:
@@ -482,13 +485,15 @@ class build_ctc_vit(nn.Module):
                 p1 = g_transform(p1)
                 
             p2 = self.base(p2)[:,1:,:].reshape(feature_map_shape).permute(0, 3, 1, 2)
+            p2=self.upsample(p2)
             
             p1_logit=self.cls_seg(p1).permute(0, 2,3,1)
             p2_logit=self.cls_seg(p2).permute(0, 2,3,1)
-            # p1_kmean=KMeans(distance=CosineSimilarity,n_clusters=self.nb_sem+1,verbose=False)
-            # p2_kmean=KMeans(distance=CosineSimilarity,n_clusters=self.nb_sem+1,verbose=False)
-            p1_result=self.kmean(p1.reshape(b,-1,self.in_planes).detach())
-            p2_result=self.kmean(p2.reshape(b,-1,self.in_planes).detach())
+            p1_kmean=KMeans(distance=CosineSimilarity,n_clusters=self.nb_sem+1,verbose=False)
+            p2_kmean=KMeans(distance=CosineSimilarity,n_clusters=self.nb_sem+1,verbose=False)
+            
+            p1_result=p1_kmean(p1.reshape(b,-1,self.kmean_c))
+            p2_result=p2_kmean(p2.reshape(b,-1,self.kmean_c))
             p1_plabel=p1_result.labels
             p2_plabel=p2_result.labels
             p1_centroid=p1_result.centers
@@ -499,7 +504,7 @@ class build_ctc_vit(nn.Module):
                 seg_mask=torch.argmax(p1_logit, dim=3).detach()
                 for i in range(256):
                     for j in range(128):
-                        color_index = seg_mask[0][int(i/16),int(j/16)] # Subtract 1 because indices start from 0
+                        color_index = seg_mask[0][int(i),int(j)] # Subtract 1 because indices start from 0
                         image[i, j] = color_map[color_index]
                 input=x[0,::].permute(1,2,0).cpu().detach().numpy()
                 input= (input-np.min(input))/(np.max(input)-np.min(input))*255

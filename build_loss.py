@@ -265,13 +265,17 @@ def build_seg_loss(cfg):
         p2_centroid=seg_info ['p2_centroid']
         
         b,h,w,c=p1_logit.shape
-        
+        # print(p1_logit.shape)
+        # print(p2_logit.shape)
         depth=p1_map.shape[-1]
         loss_list=[]
+        InfoNCE_list=[]
         L_r=InfoNCE()
+        ce=CrossEntropyLoss()
         for i in range(b):
-            info_nce_loss=(L_r(p1_logit[i,::].reshape(h*w,c),p2_logit[i,::].reshape(h*w,c)))
-            loss_list.append(info_nce_loss*0.5)
+            info_nce_loss=(ce(p1_logit[i,::].reshape(h*w,c),p2_logit[i,::].reshape(h*w,c)))
+            InfoNCE_list.append(info_nce_loss/b)
+        loss_list.append(torch.stack(InfoNCE_list).mean())
         # print(p1_map.shape)
         # print(p1_logit.shape)
         loss_list.append(cluster_loss(p1_map,p1_plabel,p1_centroid))
