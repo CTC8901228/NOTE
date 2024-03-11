@@ -430,15 +430,15 @@ class build_ctc_vit(nn.Module):
                                              
                                    )
         self.cls_seg=nn.Sequential(
-                                                    nn.Conv2d(  self.kmean_c,int(  self.kmean_c//2),1,1),
-                                                                nn.LeakyReLU(0.1),
+                                                    # nn.Conv2d(  self.kmean_c,int(  self.kmean_c//2),1,1),
+                                                    #             nn.LeakyReLU(0.1),
                                                                 # nn.BatchNorm2d(256 ),
                                                                 
                                                                 # nn.Conv2d(256,int(256),1,1),
                                                                 # nn.LeakyReLU(0.1),
                                                                 # nn.BatchNorm2d(256 ),
                                                                 
-                                                                nn.Conv2d(  self.kmean_c//2 ,int(self.prob_depth),1,1),
+                                                                nn.Conv2d(  self.kmean_c,int(self.prob_depth),1,1),
                                                  
                                                                 
                                              
@@ -800,15 +800,15 @@ class GradientReversalfunc(torch.autograd.Function):
 
 class deconv2d_bn(nn.Module):
 
-    def __init__(self, in_channels, out_channels, kernel_size=2, strides=2):
+    def __init__(self, in_channels, out_channels, kernel_size=3, strides=2,pad=1):
         super(deconv2d_bn, self).__init__()
         self.conv1 = nn.ConvTranspose2d(in_channels, out_channels,
-                                        kernel_size=kernel_size,
+                                        kernel_size=kernel_size,padding=pad,output_padding=pad,
                                        stride=strides, bias=True)
         # self.bn1 = nn.BatchNorm2d(out_channels)
         
     def forward(self, x):
-        out = F.leaky_relu(self.conv1(x),0.1)
+        out = F.relu(self.conv1(x))
         return out
 
 
