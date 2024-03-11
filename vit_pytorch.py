@@ -701,10 +701,10 @@ class part_Attention_ViT(nn.Module):
         # mask[:, 0] = self.attn_mask_generate(self.num_patches, self.patch_embed.num_y, self.patch_embed.num_x, x.device.type)
         for blk in self.blocks:
             x = blk(x,mask)
-            # layerwise_tokens.append(x)
-        # layerwise_tokens =torch.stack(layerwise_tokens,dim=-1).mean(dim=-1)
+            layerwise_tokens.append(x)
+        layerwise_tokens =torch.stack(layerwise_tokens,dim=-1).mean(dim=-1)
         # print(layerwise_tokens.shape)
-        return x #,layerwise_tokens
+        return x ,layerwise_tokens
 
     def forward(self, x,weight=None):
         x = self.forward_features(x,weight)

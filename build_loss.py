@@ -228,9 +228,14 @@ def cor_loss(cfg,seg_info,pid):
         
 
 def cluster_loss(map,label,centroid):
-    b,h,w,c=map.shape
+    map=torch.unsqueeze(map,0)
+    label=torch.unsqueeze(label,0)
+    centroid=torch.unsqueeze(centroid,0)
+    b,n,c=map.shape
     _,nb_sem,_=centroid.shape
     cen=centroid.gather(dim=1,index=torch.unsqueeze(label,-1).expand(-1, -1, centroid.shape[2])  )
+    # print(cen.shape)
+    # print(map.shape)
     # print(centroid.shape) #b,4,768#
     # print(label.shape)
     # print(label)
@@ -238,53 +243,98 @@ def cluster_loss(map,label,centroid):
     # print(cen)
     D_cluster_list=[]
     for i in range(nb_sem):
-        center_i=torch.unsqueeze(centroid[:,i,:],dim=1).repeat(1,h*w,1)
+        center_i=torch.unsqueeze(centroid[:,i,:],dim=1).repeat(1,n,1)
         D_cluster_list.append(torch.exp(-torch.nn.functional.cosine_similarity(map.reshape(b,-1,c),center_i,dim=2)))
     D_cluster_sum=torch.stack(D_cluster_list,dim=-1).sum(dim=-1)
     # print(D_cluster_sum.shape)  10,128  ##sum of difference to every centroid
     D_cluster_plabel=torch.exp(-torch.nn.functional.cosine_similarity(map.reshape(b,-1,c),cen,dim=2)) ## 10,128
-    loss=-torch.log(torch.divide(D_cluster_plabel,D_cluster_sum)).mean()
-    return loss
+    loss=-torch.log(torch.divide(D_cluster_plabel,D_cluster_sum))
+    return loss.reshape(-1)
 def build_seg_loss(cfg):
     def loss_fn(seg_info,cid,pid):
-        # seg_map=seg_info['seg_map'] .permute(0,2,3,1)  #feature map  b,h,w,768
+        loss_list=[]
+        ce=CrossEntropyLoss(reduction='none')
+        bg_kmean=KMeans(distance=LpDistance,n_clusters=2,verbose=False)
+        fg_kmean=KMeans(distance=CosineSimilarity,n_clusters=cfg.MODEL.NB_SEM,verbose=False)
+        group_segmentation_logit_list=seg_info[ 'group_segmentation_logit_list']
+        group_segmentation_map_list=seg_info[ 'group_segmentation_map_list' ]
+        group_feature_map_list=seg_info[ 'group_feature_map_list']
+        group_activation=seg_info[ 'group_activation']  # 10 256 128
+        b,h,w,c=group_segmentation_map_list[0].shape
+        _,_,_,prob_c=group_segmentation_logit_list[0].shape
+        # print(group_activation[0].shape)
+        #bg:
+        for i,t in enumerate(group_activation):
+            # print(torch.max(t.reshape(b,-1),dim=1))
+            t=torch.divide(t,torch.max(t.reshape(b,-1),dim=1)[0].reshape(b,1,1).repeat(1,h,w))  ##  D/max(D)
+            bg_result=bg_kmean(t.reshape(1,-1,1))   #.labels   .centers
+            bg_labels=bg_result.labels.reshape(b,h,w)
+            bg_centers=bg_result.centers[0]
+            thr=(bg_centers[0]+bg_centers[1])/2
+            t[t>thr]=1
+            t[t!=1]=0
+        # t: bg and fg mask
+            t=t.reshape(-1)
+            loss=(ce(group_segmentation_logit_list[i].reshape(-1,prob_c),t.long()) * ( torch.where(t.reshape(-1)==0 ,1,0 )))#.mean()  # remember to change t 
+            idx=torch.nonzero(loss!=0,as_tuple=False)
+            # print(idx)
+            loss=torch.index_select(loss,dim=0,index=idx.squeeze())
+            # print(loss)
+            # loss=(ce(group_segmentation_logit_list[i].reshape(-1,prob_c),t.long()) ).mean()  # remember to change t 
+            loss_list.append(loss)
+            map=group_segmentation_map_list[i].reshape(-1,c).reshape(1,-1,c)
+            grouping=map[:,t==1,:]
+            grouping_logit=group_segmentation_logit_list[i] .reshape(-1,prob_c)[t==1,:]
+            fg_result=fg_kmean(grouping)
+            fg_labels=fg_result.labels[0]+1
+            clusters_loss=cluster_loss(grouping.reshape(-1,c),fg_result.labels[0],fg_result.centers[0])
+            # print(grouping_logit.shape)
+            # print(clusters_loss.shape)
+            loss=ce(grouping_logit,fg_labels)+clusters_loss
+            loss_list.append(loss)
+            # print(loss.shape)
+            # print(loss)
+            # print(grouping.shape)
+            
+
+        # seg_map=seg_info['seg_map'] .permute(0,2,3,1)  #feature ma  b,h,w,768
         # seg_mask=seg_info['seg_mask'] # pseudo gt b,h,w
         
         # seg_prob=seg_info['seg_prob'].permute(0,2,3,1) # output_prob b,h,w,nb_sem+1
         # ran_map=seg_info['ran_img_map'] .permute(0,2,3,1)
         # ran_prob=seg_info['ran_img_prob'] .permute(0,2,3,1)
         
-        p1_map=seg_info['p1_map'].permute(0,2,3,1)
-        p2_map=seg_info['p2_map'].permute(0,2,3,1)
-        p1_logit=seg_info['p1_logit']
-        p2_logit=seg_info['p2_logit']
-        p1_plabel=seg_info['p1_plabel']
-        p2_plabel=seg_info['p2_plabel']
-        p1_centroid=seg_info ['p1_centroid']
-        p2_centroid=seg_info ['p2_centroid']
+        # p1_map=seg_info['p1_map'].permute(0,2,3,1)
+        # p2_map=seg_info['p2_map'].permute(0,2,3,1)
+        # p1_logit=seg_info['p1_logit']
+        # p2_logit=seg_info['p2_logit']
+        # p1_plabel=seg_info['p1_plabel']
+        # p2_plabel=seg_info['p2_plabel']
+        # p1_centroid=seg_info ['p1_centroid']
+        # p2_centroid=seg_info ['p2_centroid']
         
-        b,h,w,c=p1_logit.shape
-        # print(p1_logit.shape)
-        # print(p2_logit.shape)
-        depth=p1_map.shape[-1]
-        loss_list=[]
-        InfoNCE_list=[]
-        L_r=InfoNCE()
-        ce=CrossEntropyLoss()
-        for i in range(b):
-            info_nce_loss=(ce(p1_logit[i,::].reshape(h*w,c),p2_logit[i,::].reshape(h*w,c)))
-            InfoNCE_list.append(info_nce_loss)
-        loss_list.append(torch.stack(InfoNCE_list).mean())
-        # print(p1_map.shape)
-        # print(p1_logit.shape)
-        loss_list.append(cluster_loss(p1_map,p1_plabel,p1_centroid))
+        # 
+        # # print(p1_logit.shape)
+        # # print(p2_logit.shape)
+        # depth=p1_map.shape[-1]
+        # loss_list=[]
+        # InfoNCE_list=[]
+        # L_r=InfoNCE()
+        # ce=CrossEntropyLoss()
+        # for i in range(b):
+        #     info_nce_loss=(ce(p1_logit[i,::].reshape(h*w,c),p2_logit[i,::].reshape(h*w,c)))
+        #     InfoNCE_list.append(info_nce_loss)
+        # loss_list.append(torch.stack(InfoNCE_list).mean())
+        # # print(p1_map.shape)
+        # # print(p1_logit.shape)
+        # loss_list.append(cluster_loss(p1_map,p1_plabel,p1_centroid))
         
-        loss_list.append(cluster_loss(p2_map,p2_plabel,p2_centroid))
+        # loss_list.append(cluster_loss(p2_map,p2_plabel,p2_centroid))
         # print(cluster_loss(p2_map,p2_plabel,p2_centroid))
         # print(info_nce_loss)
         # print(p1_plabel.shape)
         # print(p1_centroid.shape)
-        
+        # print(loss_list)
         # cd_loss=cor_loss(cfg,seg_info,pid)
         # p_tri_loss=HardTripletLoss()
         # ce_loss=CrossEntropyLoss()
@@ -438,7 +488,7 @@ def build_seg_loss(cfg):
         # BACK_DET_LOSS=torch.stack(background_det_list).mean()*20
         
         
-        return torch.stack(loss_list).mean()
+        return torch.cat(loss_list).mean()
     return loss_fn
         
 def build_loss(cfg, num_classes,nb_domain):
