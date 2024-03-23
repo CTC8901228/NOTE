@@ -14,7 +14,32 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from data.build_DG_dataloader import build_reid_test_loader, build_reid_train_loader
 from torch.utils.tensorboard import SummaryWriter
+import numpy as np
+def load_mask(datasets):
+    datapath_dict={
+        'DG_Market1501' : 'data/datasets/market1501_mask',
+        'Market1501' :'data/datasets/market1501_mask',
+        
+    }
+    mask_dict={}
+    for dataset in datasets:
+        datapath=datapath_dict[dataset ]
+        data_list=os.listdir(datapath)
+        print('loading mask.............. ')
+        for data in tqdm(data_list):
+            mask_path=os.path.join(datapath,data)
+            mask=np.load(mask_path)
+            head_mask=torch.tensor(mask['head_mask'])
+            upper_body_mask=torch.tensor(mask['upper_body_mask'])
+            lower_body_mask=torch.tensor(mask['lower_body_mask'])
+            mask_dict[os.path.splitext(os.path.basename(data))[0]]={
+                'head_mask':head_mask,
+                'upper_body_mask':upper_body_mask,
+                'lower_body_mask':lower_body_mask
+            }
 
+        # print(mask_dict)
+        return mask_dict
 def ctc_vit_model(cfg,
              model,
              train_loader,
@@ -56,41 +81,21 @@ def ctc_vit_model(cfg,
     batch_size = cfg.SOLVER.IMS_PER_BATCH
     # train
     cam_list=[]
+    print(model)
     
     if cfg.MODEL.PC_LOSS:
         print('initialize the centers')
         model.train()
         
-        
-        print('pre training seg_mask')
-        for epoch in range(1, 41):
-            scheduler.step(epoch)
-            
-            for n_iter, informations in tqdm(enumerate(train_loader)):
-                optimizer.zero_grad()
-                
-                input = informations['images'].cuda()
-                vid = informations['targets']
-                target = vid
-                
-                camid = informations['camid']
-                path = informations['img_path']
-                #input = input.view(-1, input.size(2), input.size(3), input.size(4))
-                t_domains = informations['others']['domains'].float()
-                segmentation = model(input,seg_train=True,pid=vid)
-                seg_loss=seg_loss_fn(segmentation,camid,target)
-                scaler.scale(seg_loss).backward()
-
-                scaler.step(optimizer)
-                scaler.update()
-                if n_iter% 100 ==0:
-                    
-                    logger.info("Epoch[{}] Iteration[{}/{}]  seg_loss: {:.3f}"
-                    .format(epoch, n_iter+1, len(train_loader), seg_loss.cpu().item()))
+        datasets=cfg.DATASETS.TRAIN
+        # print(datasets)
+        mask_dict=load_mask(datasets)
+    
                 
         for i, informations in tqdm(enumerate(train_loader)):
             # measure data loading time
             with torch.no_grad():
+            # if True:
 
                 #input = input.cuda(non_blocking=True)
                 input = informations['images'].cuda()
@@ -99,6 +104,17 @@ def ctc_vit_model(cfg,
                 
                 camid = informations['camid']
                 path = informations['img_path']
+                mask=torch.empty(1,3,cfg.INPUT.SIZE_TRAIN[0]//16*cfg.INPUT.SIZE_TRAIN [1]//16)
+                for p in path:
+                    # print(p)
+                    head_mask=mask_dict[os.path.splitext(os.path.basename(p))[0]]['head_mask'].reshape(-1).unsqueeze(dim=0)
+                    upper_body_mask=mask_dict[os.path.splitext(os.path.basename(p))[0]]['upper_body_mask'].reshape(-1).unsqueeze(dim=0)
+                    lower_body_mask=mask_dict[os.path.splitext(os.path.basename(p))[0]]['lower_body_mask'].reshape(-1).unsqueeze(dim=0)
+                    img_mask=torch.cat((head_mask,upper_body_mask,lower_body_mask),dim=0).unsqueeze(dim=0)
+                    mask=torch.cat((mask,img_mask),dim=0)
+                mask=mask[1:,::]
+                mask.requires_grad=True
+                # print(mask.shape)   
                 #input = input.view(-1, input.size(2), input.size(3), input.size(4))
                 t_domains = informations['others']['domains'].float()
                 # print(t_domains)
@@ -110,11 +126,16 @@ def ctc_vit_model(cfg,
                 with torch.autocast(device):
                 
                     # _, _, layerwise_feat_list,_,_ ,_= model(input)
-                    score, layerwise_global_feat, layerwise_feat_list,d_score,segmentation ,part_cls_score= model(input)
+                    score, layerwise_global_feat, layerwise_feat_list,d_score,part_cls_score= model(input,mask)
                     
                     # reid_loss = loss_fn(score.cuda(), layerwise_global_feat.cuda(), target,part_feat=layerwise_feat_list,part_cls_score=part_cls_score,segmentation=segmentation,gt_domain=t_domains,pred_domain=d_score, soft_label=cfg.MODEL.SOFT_LABEL, soft_weight=cfg.MODEL.SOFT_WEIGHT, soft_lambda=cfg.MODEL.SOFT_LAMBDA)
-                    
+                    # print(layerwise_feat_list[0].shape)
                     patch_centers.get_soft_label(path, layerwise_feat_list, vid=vid, camid=camid)
+                    
+                   
+                    # reid_loss = loss_fn(score, layerwise_global_feat, target,part_feat=layerwise_feat_list,part_cls_score=part_cls_score,gt_domain=t_domains,pred_domain=d_score, all_posvid=all_posvid, soft_label=cfg.MODEL.SOFT_LABEL, soft_weight=cfg.MODEL.SOFT_WEIGHT, soft_lambda=cfg.MODEL.SOFT_LAMBDA)
+                    # scaler.scale(reid_loss).backward()
+                    # print(reid_loss.grad)
                 optimizer.zero_grad()
                 # torch.cuda.empty_cache()
                 # break
@@ -149,7 +170,17 @@ def ctc_vit_model(cfg,
 
             model.to(device)
             with amp.autocast(enabled=True):
-                score, layerwise_global_feat, layerwise_feat_list,d_score,segmentation ,part_cls_score= model(img)
+                mask=torch.empty(1,3,cfg.INPUT.SIZE_TRAIN[0]//16*cfg.INPUT.SIZE_TRAIN [1]//16)
+                
+                for p in path:
+                        # print(p)
+                    head_mask=mask_dict[os.path.splitext(os.path.basename(p))[0]]['head_mask'].reshape(-1).unsqueeze(dim=0)
+                    upper_body_mask=mask_dict[os.path.splitext(os.path.basename(p))[0]]['upper_body_mask'].reshape(-1).unsqueeze(dim=0)
+                    lower_body_mask=mask_dict[os.path.splitext(os.path.basename(p))[0]]['lower_body_mask'].reshape(-1).unsqueeze(dim=0)
+                    img_mask=torch.cat((head_mask,upper_body_mask,lower_body_mask),dim=0).unsqueeze(dim=0)
+                    mask=torch.cat((mask,img_mask),dim=0)
+                mask=mask[1:,::]
+                score, layerwise_global_feat, layerwise_feat_list,d_score ,part_cls_score= model(img,mask)
                 
                 ############## patch learning ######################
                 patch_agent, position = patch_centers.get_soft_label(img_path, layerwise_feat_list, vid=vid, camid=camid)
@@ -158,7 +189,7 @@ def ctc_vit_model(cfg,
                     feat = torch.stack(layerwise_feat_list, dim=0)
                     # feat = torch.stack(layerwise_feat_list[-1], dim=0)
                     # feat=layerwise_feat_list
-                    feat = feat[:,::1,:]
+                    # feat = feat[:,::1,:]
                     '''
                     loss1: clustering loss(for patch centers)
                     '''
@@ -172,16 +203,24 @@ def ctc_vit_model(cfg,
                     loss2: reid-specific loss
                     (ID + Triplet loss)
                     '''
-                    reid_loss = loss_fn(score, layerwise_global_feat, target,part_feat=layerwise_feat_list,part_cls_score=part_cls_score,segmentation=segmentation,gt_domain=t_domains,pred_domain=d_score, all_posvid=all_posvid, soft_label=cfg.MODEL.SOFT_LABEL, soft_weight=cfg.MODEL.SOFT_WEIGHT, soft_lambda=cfg.MODEL.SOFT_LAMBDA)
+                    reid_loss = loss_fn(score, layerwise_global_feat, target,part_feat=layerwise_feat_list,part_cls_score=part_cls_score,gt_domain=t_domains,pred_domain=d_score, all_posvid=all_posvid, soft_label=cfg.MODEL.SOFT_LABEL, soft_weight=cfg.MODEL.SOFT_WEIGHT, soft_lambda=cfg.MODEL.SOFT_LAMBDA)
                 else:
+                    
                     ploss = torch.tensor([0.]).cuda()
                     reid_loss = loss_fn(score, layerwise_global_feat, target, soft_label=cfg.MODEL.SOFT_LABEL)
-                
-                total_loss = reid_loss + l_ploss*ploss
-
+                c=0
+                # for name,p in model.named_parameters():
+                #      c+=1
+                #      print(name,p)
+                #      if c>15:break
+                total_loss = reid_loss  + l_ploss*ploss
+            # print(total_loss)
+            # print(reid_loss)
+            # print(ploss)
             scaler.scale(total_loss).backward()
-
+            # scaler.scale(ploss).backward()
             scaler.step(optimizer)
+            # optimizer.step()
             scaler.update()
 
             # score = scores[-1]

@@ -24,7 +24,7 @@ import math
 from functools import partial
 from itertools import repeat
 import random
-
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -222,7 +222,9 @@ class part_Attention(nn.Module):
 
         attn = (q @ k.transpose(-2, -1)) * self.scale
         if mask is not None:
+            mask=mask.unsqueeze(dim=1).repeat(1,self.num_heads,1,1)
             attn = attn.masked_fill(~mask.bool(), torch.tensor(-1e3, dtype=torch.float16)) # mask
+            # mask=mask.unsqueeze(dim=1).repeat(1,self.num_heads,1,1)
         attn = attn.softmax(dim=-1)
         attn = torch.mul(attn, mask) ###
         attn = self.attn_drop(attn)
@@ -587,7 +589,7 @@ class part_Attention_ViT(nn.Module):
         # self.patch_embed.proj.weight.requires_grad = False
         # self.patch_embed.proj.bias.requires_grad = False
 
-        num_patches = self.patch_embed.num_patches + self.cfg.MODEL.NB_SEM
+        num_patches = self.patch_embed.num_patches + self.cfg.MODEL.NB_SEM+1
         self.num_patches = num_patches
         self.num_heads = num_heads
 
@@ -626,7 +628,6 @@ class part_Attention_ViT(nn.Module):
         trunc_normal_(self.part_token2, std=.02)
         trunc_normal_(self.part_token3, std=.02)
         trunc_normal_(self.pos_embed, std=.02)
-
         self.apply(self._init_weights)
 
     def attn_mask_generate(self, N=129, H=16, W=8, device='cuda'):
@@ -660,30 +661,60 @@ class part_Attention_ViT(nn.Module):
         self.num_classes = num_classes
         self.fc = nn.Linear(self.embed_dim, num_classes) if num_classes > 0 else nn.Identity()
 
-    def forward_features(self, x,weight=None):
+    def forward_features(self, x,mask=None):
         B = x.shape[0]
         
-
-            
             
         x = self.patch_embed(x)  #64,128,768
-        if weight is not None:
-            part_cls_query=self.part_cls_query.repeat(B,1,1)
-            x=torch.cat((part_cls_query,x),dim=1)
-            # weight=torch.unsqueeze(weight, 2).repeat(1,1,self.embed_dim)
-            # x=torch.multiply(x, weight)
-        else:
         
-            cls_tokens = self.cls_token.expand(B, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
+        # if weight is not None:
+        B,N,C=x.shape
+        # part_cls_query=self.part_cls_query.repeat(B,1,1)
+        cls_tokens = self.cls_token.expand(B, -1, -1)
+        # x=torch.cat((cls_tokens,part_cls_query,x),dim=1)
+        ## mask:  B,3,128,  ->B ,4,128
+        if mask is not None:
+        
+            global_mask=torch.ones(B,1,128)
+            mask=torch.cat((global_mask,mask),dim=1)
+            query_img_mask=mask
+            
+            ###B,4,128 -> b,132,128 
+            # print(mask.shape)
+            img_mask=torch.ones((B,128,128))
+            mask=torch.cat((mask,img_mask),dim=1)
+            # (b,4,4) +  b,128,4 = b,132,4
+            query_mask=torch.tensor(np.identity(4)).unsqueeze(0).repeat(B,1,1)
+            left=torch.cat((query_mask,query_img_mask.permute(0,2,1)),dim=1)
+            ###b,132,128 ->b,132,132
+            mask=torch.cat((left,mask),dim=2).bool()
+            # print(mask.shape)
+                # weight=torch.unsqueeze(weight, 2).repeat(1,1,self.embed_dim)
+                # x=torch.multiply(x, weight)
+            # else:
+            # mask[mask==0]=-1
+            # mask[mask==1]=0
+            # mask[mask==-1]=1
+            
+            
+        cls_tokens = self.cls_token.expand(B, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
+        part_tokens_1 = self.part_token1.expand(B, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
+        part_tokens_2 = self.part_token2.expand(B, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
+        part_tokens_3 = self.part_token3.expand(B, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
+        # a=part_tokens_1.mean()
+        # a.backward()
+        # print(a.grad)
+        # x=x.requires_grad_()
 
-            x = torch.cat((cls_tokens, x), dim=1)
+        x = torch.cat((cls_tokens,part_tokens_1,part_tokens_2,part_tokens_3, x), dim=1)
         c=x.shape[-1]
         seq_l=x.shape[1]
         # print(x.shape)
-        if weight is not None:
-            x = x + self.pos_embed
-        else:
-            x = x + self.pos_embed[:,:-self.cfg.MODEL.NB_SEM+1,:]
+        # if weight is not None:
+        #     x = x + self.pos_embed
+        # else:
+        x = x + self.pos_embed
+
         # if weight is not None:
         #     weight=weight.reshape(B,-1)
         #     weight=torch.unsqueeze(weight, 2).repeat(1,1,1,c)
@@ -691,23 +722,42 @@ class part_Attention_ViT(nn.Module):
         #     x=torch.multiply(x, weight)
       
         # print(x.shape)
+        # print(mask.requires_grad_())
         x=torch.squeeze(x)
         x = self.pos_drop(x)
         layerwise_tokens = []
-        mask = torch.ones([B, 1, seq_l, seq_l], device=x.device.type)
+        # mask = torch.ones([B, 1, seq_l, seq_l], device=x.device.type)
         # if self.training:
-            # mask[:, 0] = self.mask
+        #     mask[:, 0] = self.mask
         # for i in range(B):
-        # mask[:, 0] = self.attn_mask_generate(self.num_patches, self.patch_embed.num_y, self.patch_embed.num_x, x.device.type)
+        #     mask[:, 0] = self.attn_mask_generate(self.num_patches, self.patch_embed.num_y, self.patch_embed.num_x, x.device.type)
         for blk in self.blocks:
-            x = blk(x,mask)
-            layerwise_tokens.append(x)
-        layerwise_tokens =torch.stack(layerwise_tokens,dim=-1).mean(dim=-1)
+            
+            # a=x.mean()
+            # a.backward()
+            # print(a.grad)
+            if mask is not None:
+                
+                x = blk(x,mask.cuda())
+            else:
+                mask=torch.tensor(np.identity(4)).unsqueeze(dim=0).repeat(B,1,1)
+                one=torch.ones(B,4,N)
+                mask=torch.cat((mask,one),dim=2)
+                one=torch.ones(B,N,seq_l)
+                mask=torch.cat((mask,one),dim=1).bool()
+                x = blk(x,mask.cuda())
+                
+        #     layerwise_tokens.append(x)
+        # layerwise_tokens =torch.stack(layerwise_tokens,dim=-1).mean(dim=-1)
+        x=self.norm(x)
         # print(layerwise_tokens.shape)
-        return x ,layerwise_tokens
+        # a=x.mean()
+        # a.backward()
+        # print(a.grad)
+        return x # ,layerwise_tokens
 
-    def forward(self, x,weight=None):
-        x = self.forward_features(x,weight)
+    def forward(self, x,mask):
+        x = self.forward_features(x,mask)
         return x
 
     def load_param(self, model_path):

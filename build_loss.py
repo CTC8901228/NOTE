@@ -255,7 +255,7 @@ def build_seg_loss(cfg):
         loss_list=[]
         ce=CrossEntropyLoss(reduction='none')
         bg_kmean=KMeans(distance=LpDistance,n_clusters=2,verbose=False)
-        fg_kmean=KMeans(distance=CosineSimilarity,n_clusters=cfg.MODEL.NB_SEM,verbose=False)
+        fg_kmean=KMeans(distance=CosineSimilarity,n_clusters=cfg.MODEL.NB_SEM+1,verbose=False)
         group_segmentation_logit_list=seg_info[ 'group_segmentation_logit_list']
         group_segmentation_map_list=seg_info[ 'group_segmentation_map_list' ]
         group_feature_map_list=seg_info[ 'group_feature_map_list']
@@ -266,31 +266,33 @@ def build_seg_loss(cfg):
         #bg:
         for i,t in enumerate(group_activation):
             # print(torch.max(t.reshape(b,-1),dim=1))
-            t=torch.divide(t,torch.max(t.reshape(b,-1),dim=1)[0].reshape(b,1,1).repeat(1,h,w))  ##  D/max(D)
-            bg_result=bg_kmean(t.reshape(1,-1,1))   #.labels   .centers
-            bg_labels=bg_result.labels.reshape(b,h,w)
-            bg_centers=bg_result.centers[0]
-            thr=(bg_centers[0]+bg_centers[1])/2
-            t[t>thr]=1
-            t[t!=1]=0
-        # t: bg and fg mask
-            t=t.reshape(-1)
-            loss=(ce(group_segmentation_logit_list[i].reshape(-1,prob_c),t.long()) * ( torch.where(t.reshape(-1)==0 ,1,0 )))#.mean()  # remember to change t 
-            idx=torch.nonzero(loss!=0,as_tuple=False)
-            # print(idx)
-            loss=torch.index_select(loss,dim=0,index=idx.squeeze())
-            # print(loss)
-            # loss=(ce(group_segmentation_logit_list[i].reshape(-1,prob_c),t.long()) ).mean()  # remember to change t 
-            loss_list.append(loss)
+        #     t=torch.divide(t,torch.max(t.reshape(b,-1),dim=1)[0].reshape(b,1,1).repeat(1,h,w))  ##  D/max(D)
+        #     bg_result=bg_kmean(t.reshape(1,-1,1))   #.labels   .centers
+        #     bg_labels=bg_result.labels.reshape(b,h,w)
+        #     bg_centers=bg_result.centers[0]
+        #     thr=(bg_centers[0]+bg_centers[1])/2
+        #     t[t>thr]=1
+        #     t[t!=1]=0
+        # # t: bg and fg mask
+        #     t=t.reshape(-1)
+        #     loss=(ce(group_segmentation_logit_list[i].reshape(-1,prob_c),t.long()) * ( torch.where(t.reshape(-1)==0 ,1,0 )))#.mean()  # remember to change t 
+        #     idx=torch.nonzero(loss!=0,as_tuple=False)
+        #     # print(idx)
+        #     loss=torch.index_select(loss,dim=0,index=idx.squeeze())
+        #     # print(loss)
+        #     # loss=(ce(group_segmentation_logit_list[i].reshape(-1,prob_c),t.long()) ).mean()  # remember to change t 
+        #     loss_list.append(loss)
             map=group_segmentation_map_list[i].reshape(-1,c).reshape(1,-1,c)
-            grouping=map[:,t==1,:]
-            grouping_logit=group_segmentation_logit_list[i] .reshape(-1,prob_c)[t==1,:]
+            grouping=map #[:,t==1,:]
+            
+            grouping_logit=group_segmentation_logit_list[i] .reshape(-1,prob_c)
+            # grouping_logit=group_segmentation_logit_list[i] .reshape(-1,prob_c)[t==1,:]
             fg_result=fg_kmean(grouping)
-            fg_labels=fg_result.labels[0]+1
-            clusters_loss=cluster_loss(grouping.reshape(-1,c),fg_result.labels[0],fg_result.centers[0])
+            fg_labels=fg_result.labels[0]
+            # clusters_loss=cluster_loss(grouping.reshape(-1,c),fg_result.labels[0],fg_result.centers[0])
             # print(grouping_logit.shape)
             # print(clusters_loss.shape)
-            loss=ce(grouping_logit,fg_labels)+clusters_loss
+            loss=ce(grouping_logit,fg_labels) #+clusters_loss
             loss_list.append(loss)
             # print(loss.shape)
             # print(loss)
@@ -500,8 +502,8 @@ def build_loss(cfg, num_classes,nb_domain):
     else:
         feat_dim = feat_dim_dict[cfg.MODEL.NAME]
     center_criterion = CenterLoss(num_classes=num_classes, feat_dim=feat_dim, use_gpu=False)  # center loss
-    if 'cos' in cfg.MODEL.SEM_LOSS_TYPE:
-        sem_triplet=TripletLoss()  # triplet loss
+    # if 'cos' in cfg.MODEL.SEM_LOSS_TYPE:
+    #     sem_triplet=TripletLoss()  # triplet loss
     if 'triplet' in cfg.MODEL.METRIC_LOSS_TYPE:
         if cfg.MODEL.NO_MARGIN:
             triplet = TripletLoss()
@@ -552,9 +554,9 @@ def build_loss(cfg, num_classes,nb_domain):
                     part_mask_target=part_mask_target+[i]*b
                 part_mask_target=torch.tensor(part_mask_target).cuda()
                 # print(part_mask_target   ,part_feat.shape )
-                SEM_LOSS= torch.abs(segmentation-0.5).mean() *0 +\
-                     torch.stack(part_xent_list).mean()*0  +\
-                         cfg.MODEL.TRIPLET_LOSS_WEIGHT *   sem_triplet(part_feat, part_mask_target)[0] *0.8
+                # SEM_LOSS= torch.abs(segmentation-0.5).mean() *0 +\
+                #      torch.stack(part_xent_list).mean()*0  +\
+                #          cfg.MODEL.TRIPLET_LOSS_WEIGHT *   sem_triplet(part_feat, part_mask_target)[0] *0.8
                         
                         # torch.abs(segmentation-0.5).mean()
                 
@@ -568,17 +570,20 @@ def build_loss(cfg, num_classes,nb_domain):
                         ID_LOSS = xent(score, target)
                 else:
                     ID_LOSS = F.cross_entropy(score, target)
-
-                TRI_LOSS = triplet(feat, target)[0]
+                
+                TRI_LOSS = triplet(feat.cpu(), target.cpu())[0]
+                # print(feat)
+                # print(target)
+                # print(TRI_LOSS)
                 # DOMAIN_LOSS = xent(domains, t_domains)
                 
                 if random.randint(0,100)==80:
-                    print(f'showing loss with SEMLOSS:{cfg.MODEL.ID_LOSS_WEIGHT*SEM_LOSS},ID_LOSS:{cfg.MODEL.ID_LOSS_WEIGHT*ID_LOSS}, TRI_LOSS:{  cfg.MODEL.TRIPLET_LOSS_WEIGHT * TRI_LOSS},GRL_LOSS:{cfg.MODEL.ID_LOSS_WEIGHT*GRL_LOSS}')
+                    print(f'showing loss with ,ID_LOSS:{cfg.MODEL.ID_LOSS_WEIGHT*ID_LOSS}, TRI_LOSS:{  cfg.MODEL.TRIPLET_LOSS_WEIGHT * TRI_LOSS},GRL_LOSS:{cfg.MODEL.ID_LOSS_WEIGHT*GRL_LOSS}')
                 # print(ID_LOSS,SEM_LOSS,TRI_LOSS,GRL_LOSS)
-                return cfg.MODEL.ID_LOSS_WEIGHT * ID_LOSS + \
-                               cfg.MODEL.TRIPLET_LOSS_WEIGHT * TRI_LOSS+\
-                                 cfg.MODEL.ID_LOSS_WEIGHT *  GRL_LOSS +\
-                                     cfg.MODEL.ID_LOSS_WEIGHT * SEM_LOSS
+                return cfg.MODEL.ID_LOSS_WEIGHT * ID_LOSS +\
+                            cfg.MODEL.ID_LOSS_WEIGHT *  GRL_LOSS +\
+                               cfg.MODEL.TRIPLET_LOSS_WEIGHT * TRI_LOSS
+                                    #  cfg.MODEL.ID_LOSS_WEIGHT * SEM_LOSS
             elif cfg.MODEL.METRIC_LOSS_TYPE == 'triplet_center':
                 if cfg.MODEL.IF_LABELSMOOTH == 'on':
                     return xent(score, target) + \

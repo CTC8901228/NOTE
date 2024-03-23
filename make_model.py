@@ -399,213 +399,91 @@ class build_ctc_vit(nn.Module):
         self.D_classifier = nn.Linear(self.in_planes, nb_domain, bias=False)
         # self.DecoderLayer = TransformerDecoderLayer(d_model=self.in_planes, nhead=8)
         # self.Decoder = TransformerDecoder(self.DecoderLayer, num_layers=6)
-        self.part_classify_token = nn.Parameter(torch.zeros(1, 1, self.in_planes))  # not used
-        self.part_cls_query = nn.Parameter(torch.zeros(1, self.nb_sem, self.in_planes))
-        self.cls_query = nn.Parameter(torch.zeros(1, 1, self.in_planes))
-        self.seg_query = nn.Parameter(torch.zeros(1, 1, self.in_planes))
+        # self.part_classify_token = nn.Parameter(torch.zeros(1, 1, self.in_planes))  # not used
+        # self.part_cls_query = nn.Parameter(torch.zeros(1, self.nb_sem, self.in_planes))
+        # self.cls_query = nn.Parameter(torch.zeros(1, 1, self.in_planes))
+        # self.seg_query = nn.Parameter(torch.zeros(1, 1, self.in_planes))
         
         # self.seg_transform = nn.Sequential(nn.Linear(self.in_planes, int(cfg.INPUT.SIZE_TRAIN[0] / 2 * \
         #                                                                                             cfg.INPUT.SIZE_TRAIN[1] / 2)),
                                                                     
         #                            )
         self.part_classify_token = nn.Parameter(torch.zeros(1, 1, self.in_planes))  # not used
-        self.kmean_c=64
+        # self.kmean_c=32
         
-        self.upsample = nn.Sequential(deconv2d_bn(int(self.in_planes),512),
-                                    deconv2d_bn(512,256),
-                                    deconv2d_bn(256,256),
-                                    deconv2d_bn(256, self.kmean_c))
+        # self.upsample = nn.Sequential(deconv2d_bn(int(self.in_planes),512),
+        #                             deconv2d_bn(512,256),
+        #                             deconv2d_bn(256,256),
+        #                             deconv2d_bn(256, self.kmean_c))
         self.prob_depth=self.nb_sem+1
-        self.dd=nn.Sequential(
-                                                                nn.Conv2d(self.in_planes,self.kmean_c,1,1),
-                                                                # nn.LeakyReLU(0.1),
-                                                                # nn.Conv2d(256,self.kmean_c,1,1),
+        # self.dd=nn.Sequential(
+        #                                                         nn.Conv2d(self.in_planes,self.kmean_c,1,1),
+        #                                                         # nn.LeakyReLU(0.1),
+        #                                                         # nn.Conv2d(256,self.kmean_c,1,1),
                                                                 
-                                                                # nn.BatchNorm2d(256 ),
+        #                                                         # nn.BatchNorm2d(256 ),
                                                                 
                                                                 
                                                  
                                                                 
                                              
                                              
-                                   )
-        self.cls_seg=nn.Sequential(
-                                                    # nn.Conv2d(  self.kmean_c,int(  self.kmean_c//2),1,1),
-                                                    #             nn.LeakyReLU(0.1),
-                                                                # nn.BatchNorm2d(256 ),
+        #                            )
+        # self.cls_seg=nn.Sequential(
+        #                                             # nn.Conv2d(  self.kmean_c,int(  self.kmean_c//2),1,1),
+        #                                             #             nn.LeakyReLU(0.1),
+        #                                                         # nn.BatchNorm2d(256 ),
                                                                 
-                                                                # nn.Conv2d(256,int(256),1,1),
-                                                                # nn.LeakyReLU(0.1),
-                                                                # nn.BatchNorm2d(256 ),
+        #                                                         # nn.Conv2d(256,int(256),1,1),
+        #                                                         # nn.LeakyReLU(0.1),
+        #                                                         # nn.BatchNorm2d(256 ),
                                                                 
-                                                                nn.Conv2d(  self.kmean_c,int(self.prob_depth),1,1),
+        #                                                         nn.Conv2d(  self.kmean_c,int(self.prob_depth),1,1),
                                                  
                                                                 
                                              
                                              
-                                   )
+        #                            )
         # self.random_imgclass_list=os.listdir(os.path.join('data/datasets/Linnaeus/train'))
         self.save_t=0
-        self.kmean=KMeans(distance=CosineSimilarity,n_clusters=self.nb_sem+1,verbose=False)
-        self.p_transform=[torchvision.transforms.ColorJitter(0.5,0,0,0),
-                                torchvision.transforms.ColorJitter(0.,0.5,0,0),
-                            torchvision.transforms.ColorJitter(0,0,0.5,0),
-                            torchvision.transforms.ColorJitter(0,0,0,0.5),
-                          torchvision.transforms.GaussianBlur(5),
-                          torchvision.transforms.Grayscale(3)]
-        self.g_transform=[torchvision.transforms.transforms.F.crop,
-                          torchvision.transforms.transforms.F.hflip]
-        self.resize=torchvision.transforms.Resize((cfg.INPUT.SIZE_TRAIN[0],cfg.INPUT.SIZE_TRAIN[1]))
-        self.resize_mem=torchvision.transforms.Resize((cfg.INPUT.SIZE_TRAIN[0]//16,cfg.INPUT.SIZE_TRAIN[1]//16))
+        # self.kmean=KMeans(distance=CosineSimilarity,n_clusters=self.nb_sem,verbose=False)
+        # self.p_transform=[torchvision.transforms.ColorJitter(0.5,0,0,0),
+        #                         torchvision.transforms.ColorJitter(0.,0.5,0,0),
+        #                     torchvision.transforms.ColorJitter(0,0,0.5,0),
+        #                     torchvision.transforms.ColorJitter(0,0,0,0.5),
+        #                   torchvision.transforms.GaussianBlur(5),
+        #                   torchvision.transforms.Grayscale(3)]
+        # self.g_transform=[torchvision.transforms.transforms.F.crop,
+        #                   torchvision.transforms.transforms.F.hflip]
+        # self.resize=torchvision.transforms.Resize((cfg.INPUT.SIZE_TRAIN[0],cfg.INPUT.SIZE_TRAIN[1]))
+        # self.resize_mem=torchvision.transforms.Resize((cfg.INPUT.SIZE_TRAIN[0]//16,cfg.INPUT.SIZE_TRAIN[1]//16))
         
-    def forward(self, x,seg_train=False,pid=None):
+    def forward(self, x,mask=None,seg_train=False,pid=None):
         b, c, h, w = x.shape
+        
+#         x = torch.tensor([2.0], requires_grad=True)  # Input tensor with requires_grad=True to track computation history
+
+# # Define a simple function
+#         def f(x):
+#             return 3*x**2 + 2*x - 1
+
+#         # Forward pass
+#         y = f(x)
+
+#         # Compute gradients
+#         y.backward()  # Backward pass to compute gradients
+
+#         # Print the gradients
+#         print("Gradient of f(x) at x=2:", x.grad)
         mem_H = int(self.input_H / self.cfg.MODEL.STRIDE_SIZE[0])
         mem_W = int(self.input_W / self.cfg.MODEL.STRIDE_SIZE[1])
         feature_map_shape = (b, mem_H, mem_W, self.in_planes)
-        if seg_train:
-            # p_transform1=random.choice(self.p_transform)
-            # p_transform2=random.choice(self.p_transform)
-            # g_transform=random.choice(self.g_transform)
-            # if 'crop' in str(g_transform):
-            #     crop_arg=(random.randint(0,h//2),random.randint(0,w//2),random.randint(h//4,h//2),random.randint(h//4,w//2))
-            #     crop_arg_mem=(crop_arg[0]//16,crop_arg[1]//16,crop_arg[2]//16,crop_arg[3]//16)
-            # else:
-            #     pass                
-            # p1=p_transform1(x)
-            # p2=p_transform2(x)
-            feature_map = self.base(x)[1][:,1:,:].reshape(feature_map_shape).permute(0, 3, 1, 2)
-            segmentation_map_=self.upsample(feature_map)
-            segmentation_map=segmentation_map_.permute(0,2,3,1)
-            
-            segmentation_logit=self.cls_seg(segmentation_map_).permute(0,2,3,1)
-            # segmentation_logit= torch.nn.functional.softmax(segmentation_logit,-1)
-            id_list=[]
-            for i in range(b):
-                if pid[i] not in id_list:
-                    id_list.append(pid[i])
-            group_feature_map_list=[[] for i in range(len(id_list))]
-            group_segmentation_map_list=[[] for i in range(len(id_list))]#[[]*len(id_list)]
-            group_segmentation_logit_list=[[] for i in range(len(id_list))]#[[]*len(id_list)]
-            group_activation=[]
-            # print(group_segmentation_map_list)
-            # print(id_list)
-            # print(len(id_list))
-            # print(pid)
-            for i in range(b):
-                idx_id=id_list.index(pid[i]) 
-                group_feature_map_list[idx_id].append(feature_map[i])
-                group_segmentation_map_list[idx_id].append(segmentation_map[i])
-                group_segmentation_logit_list[idx_id].append(segmentation_logit[i])
-            for i,t in enumerate(group_feature_map_list):
-                group_feature_map_list[i]=torch.stack(t,dim=0)
-            for i,t in enumerate(group_segmentation_map_list):
-                
-                group_segmentation_map_list[i]=torch.stack(t,dim=0)
-                
-            for i,t in enumerate(group_segmentation_logit_list):
-                group_segmentation_logit_list[i]=torch.stack(t,dim=0)
-            for i,t in enumerate(group_segmentation_map_list):
-                group_activation.append(torch.functional.norm(t,dim=-1))
-            
-
-
-            # print(group_segmentation_logit_list[0].shape)#torch.Size([10, 256, 128, 3])
-            # print(group_segmentation_map_list[0].shape)#torch.Size([10, 256, 128, 32])
-            # print(group_feature_map_list[0].shape)#torch.Size([10, 768, 16, 8])
-            # print(group_activation[0].shape)
-            if randint(0,30)==26:
-                color_map=np.array([[255,0,0],[0,255,0],[0,0,255],[255,255,0],[0,255,255]])
-                image = np.zeros((256, 128, 3), dtype=np.uint8)
-                seg_mask=torch.argmax(torch.nn.functional.softmax(segmentation_logit.reshape(b,-1,self.prob_depth),dim=1),dim=-1).reshape(b,h,w).detach()
-                
-                for i in range(256):
-                    for j in range(128):
-                        color_index = seg_mask[0][int(i),int(j)] 
-                        image[i, j] = color_map[color_index]
-                input=x[0,::].permute(1,2,0).cpu().detach().numpy()
-                input= (input-np.min(input))/(np.max(input)-np.min(input))*255
-                image=image*0.7+input*0.3
-                # plt.imshow(image)
-                image = np.uint8(image)
-                image = Image.fromarray(image)
-                image.save(os.path.join('exp_2',f"saved{self.save_t}.png"))
-                self.save_t+=1
-                print('saved img')
-            return{
-                'group_segmentation_logit_list' : group_segmentation_logit_list,
-                'group_segmentation_map_list' : group_segmentation_map_list,
-                'group_feature_map_list' : group_feature_map_list,
-                'group_activation': group_activation
-            }
-            # kmean_result=[]
-            # for t  in group_segmentation_map_list:
-            #     kmean_result.append(self.kmean(t.reshape))
-            # p1=self.dd(p1)
-            # if 'crop' in str(g_transform):
-            #     p2 = g_transform(p2,*crop_arg)
-            #     p2=self.resize(p2)
-            #     p1 = g_transform(p1,*crop_arg_mem)
-            #     p1=self.resize_mem(p1)
-                
-                
-            # else:
-            #     p2 = g_transform(p2)
-            #     p1 = g_transform(p1)
-            # p2 = self.base(p2)[1][:,1:,:].reshape(feature_map_shape).permute(0, 3, 1, 2)
-            # p2=self.dd(p2)
-            
-            # p1_logit=torch.nn.functional.softmax(self.cls_seg(p1).permute(0, 2,3,1),-1) #.reshape(b,-1,self.prob_depth),dim=(1)).reshape(b,h,w,-1)
-            # # p1_logit=torch.nn.functional.softmax(p1_logit,dim=(-1))
-            # p2_logit=torch.nn.functional.softmax(self.cls_seg(p2).permute(0, 2,3,1),-1) #.reshape(b,-1,self.prob_depth),dim=(1)).reshape(b,h,w,-1)
-            
-            # p2_logit=torch.nn.functional.softmax(p2_logit,dim=(-1))
-            # p2_logit=torch.nn.functional.softmax(self.cls_seg(p2).permute(0, 2,3,1).reshape(b,-1,self.prob_depth),dim=(1)).reshape(b,mem_H,mem_W,-1)
-            # p2_logit=torch.softmax(self.cls_seg(p2).permute(0, 2,3,1),dim=(1,2))
-            # p1_logit=torch.nn.functional.normalize(self.cls_seg(p1).permute(0, 2,3,1),dim=(1,2))
-            # p1_logit=p1_logit-torch.unsqueeze(torch.mean(p1_logit,dim=(1,2)),1).repeat(1,1,1,self.prob_depth)
-            # # p1_logit=p1_logit-torch.mean(p1_logit,dim=-1)
-            # p2_logit=torch.nn.functional.normalize(self.cls_seg(p2).permute(0, 2,3,1),dim=-1)
-            # p2_logit=p2_logit-torch.unsqueeze(torch.mean(p2_logit,dim=-1),-1).repeat(1,1,1,self.prob_depth)
-            
-            # p2_logit=torch.softmax(self.cls_seg(p2).permute(0, 2,3,1),dim=-1)
-            # p1_kmean=KMeans(distance=CosineSimilarity,n_clusters=self.nb_sem+1,verbose=False)
-            # p2_kmean=KMeans(distance=CosineSimilarity,n_clusters=self.nb_sem+1,verbose=False)
-            # with torch.no_grad():
-            # p1_result=self.kmean(p1.reshape(b,-1,self.kmean_c))
-            # p2_result=self.kmean(p2.reshape(b,-1,self.kmean_c))
-            # p1_plabel=p1_result.labels
-            # p2_plabel=p2_result.labels
-            # p1_centroid=p1_result.centers
-            # p2_centroid=p1_result.centers
-            # print(torch.argmax(p1_logit, dim=3).detach())
-            # print(p1_logit)
-
-            # return {
-            #     'p1_map':p1,
-            #     'p2_map':p2,
-            #     'p1_logit':p1_logit,
-            #         'p2_logit':p2_logit,
-            #         'p1_plabel':p1_plabel,
-            #         'p2_plabel':p2_plabel,
-            #         'p1_centroid':p1_centroid,
-            #         'p2_centroid':p2_centroid
-            #         }
-
-        layerwise_tokens = self.base(x) [0] # B, N, C   64,132,768
+        
+        layerwise_tokens = self.base(x,mask)  # B, N, C   64,132,768
         # layerwise_cls_tokens =layerwise_tokens[:, 0] # cls token
-        encoder_out = layerwise_tokens[0]  # without classification output
+        encoder_out = layerwise_tokens # without classification output
         
         
-        # seg_query = self.seg_query.repeat(b, 1, 1)
-        # cls_query = self.cls_query.repeat(b, 1, 1)
-        part_cls_query = self.part_cls_query.repeat(b, 1, 1)
-        
-        
-        
-        # # first_query = torch.cat((seg_query, cls_query), dim=1)  # b,2,768
-        # tgt_mask = self.generate_tgt_mask (first_query)
-        # first_out = self.Decoder(first_query, encoder_out, tgt_mask=tgt_mask)
         cls_out = encoder_out[:, 0,:]
         layerwise_cls_tokens = cls_out
         # cls_score=self.classifier(cls_out)
@@ -616,122 +494,15 @@ class build_ctc_vit(nn.Module):
         feat = self.bottleneck(cls_out)
 
         if self.training:
-            
-            # seg_out = torch.unsqueeze(first_out[:, 0,:], dim=1)  # b,1,inplane
-            # seg_out = seg_out.repeat(1, int(mem_H * mem_W), 1)
-            
-            feature_map_shape = (b, mem_H, mem_W, self.in_planes)
-            
-            # seg_out = seg_out.reshape(feature_map_shape)
-            feature_map = layerwise_tokens[0][:,1:,:].reshape(feature_map_shape)
-            # feature_map = torch.cat((feature_map, seg_out),dim=3).permute(0, 3, 1, 2)
-            feature_map =feature_map.permute(0, 3, 1, 2).detach()
-            # feature_map=self.upsample(feature_map)
-            
-            # feature_map = self.upsample(feature_map.detach())
-            seg_map=feature_map
-            seg_prob=self.cls_seg(seg_map)
-            seg_model=self.kmean
-            # seg_mask=seg_model.fit_predict(seg_prob.reshape(b,-1,self.prob_depth).detach().cpu()).cuda().reshape(b,mem_H,mem_W).detach()
-            seg_mask = torch.argmax(seg_prob, dim=1).detach()
-            # print(seg_mask)
-            segmentation = [(seg_mask == i) for i in range( self.nb_sem + 1)]  # [32,256,128]*3
-            segmentation_pic=segmentation
-            segmentation=segmentation[1:]
-            segmentation = torch.stack(segmentation, dim=1).reshape(-1,int( self.input_H/16),int( self.input_W/16))
-            
-            stacked_x = torch.unsqueeze(x, dim=1).repeat(1, self.nb_sem, 1, 1, 1).reshape(-1, 3, self.input_H, self.input_W)
-            part_encoder_shape = (b, self.nb_sem, mem_H, mem_W, self.in_planes)
-            part_encoder_out = self.base(stacked_x, segmentation)[0] [:,:int(self.nb_sem+1),:] # .reshape(part_encoder_shape)  # 32*3,16,8,768
-            
-            # sec_out = self.Decoder(sec_query, part_encoder_out, tgt_mask=tgt_mask).reshape(b, self.nb_sem, self.nb_sem, self.in_planes)  # 32,3,3,768
-            part_feat_list=[part_encoder_out[:, i,:] for i in range(1,self.nb_sem+1)]
+            part_feat_list=[encoder_out[:, i,:] for i in range(1,self.nb_sem+1)]
             layerwise_part_tokens = part_feat_list   #torch.stack([sec_out[:, i, i,:] for i in range(self.nb_sem)]       , dim=1)  # 32,3,768
 
             cls_score = self.classifier(feat)
             grl_feat = self.grl(feat)
             d_score = self.D_classifier(grl_feat)
-            part_cls_score = [self.part_classifier(layerwise_part_tokens[i]) for i in range(1,self.nb_sem)]
-            
-            ###randon img reading
-            # ran_imgclass=random.choice(self.random_imgclass_list)
-            # ran_img_list=os.listdir(os.path.join('data/datasets/Linnaeus/train',ran_imgclass))
-            # ran_img=random.sample(ran_img_list,b)
-            # ran_list=[]
-            # for i in ran_img:
-            #     ran_list.append(os.path.join('data/datasets/Linnaeus/train',ran_imgclass,i))
-            # ran_img_list=[]
-            # for img in ran_list:
-            #     ran_img=PIL.Image.open(img)
-            #     ran_img=ran_img.resize((h,w), resample=0) 
-            #     ran_img=torchvision.transforms.ToTensor()(ran_img).cuda().reshape(c,h,w)
-            #     ran_img_list.append(ran_img)
-                
-            # ran_input=torch.stack(ran_img_list,dim=0)
-            
-            # ran_img_tokens= self.base(ran_input)[0][:,1:,::]
-            
-            # ran_img_tokens=self.upsample(ran_img_tokens.detach())
-            
-            # ran_img_tokens=ran_img_tokens.reshape(b,h,w,256).permute(0, 3, 1, 2).detach()
-            # ran_img_prob=self.cls_seg(ran_img_tokens)
-            seg_info = {
-                'seg_map':seg_map,
-                'seg_mask':seg_mask,
-                'seg_prob' : seg_prob,
-                'ran_img_map':seg_prob,
-                'ran_img_prob':seg_prob
-            }
-            
-            if randint(0,300)==1:
-                color_map=np.array([[255,0,0],[0,255,0],[0,0,255],[255,255,0],[0,255,255]])
-                image = np.zeros((256, 128, 3), dtype=np.uint8)
-                
-                for i in range(256):
-                    for j in range(128):
-                        color_index = seg_mask[0][int(i/16),int(j/16)] # Subtract 1 because indices start from 0
-                        image[i, j] = color_map[color_index]
-                input=x[0,::].permute(1,2,0).cpu().detach().numpy()
-                input= (input-np.min(input))/(np.max(input)-np.min(input))*255
-                image=image*0.2+input*0.8
-                # plt.imshow(image)
-                image = np.uint8(image)
-                image = Image.fromarray(image)
-                image.save(os.path.join('exp_2',f"saved{self.save_t}.png"))
-                self.save_t+=1
-                print('saved img')
-                
-                # for i in range(self.nb_sem+1):
+            part_cls_score = [self.part_classifier(layerwise_part_tokens[i]) for i in range(self.nb_sem)]
 
-                    
-
-
-                #     # seg_masks =segmentation_pic[i][0,::].cpu().detach().numpy().astype(np.int16)   
-                #     seg_masks =segmentation_pic[i][0,::].cpu().detach().numpy().astype(np.int16)   ##
-                #     seg_masks*= 255
-                #     seg_masks =np.uint8(seg_masks)
-                #     seg_masks= np.stack([seg_masks,seg_masks,seg_masks],axis=-1) 
-                    
-                #     # image = Image.fromarray(seg_masks)
-                #     # image.save(os.path.join('exp',f"seg_masks{i}_saved{self.save_t}.png"))
-                # norm=torch.functional.norm(seg_map[0,::].permute(1,2,0), dim=2).cpu().detach().numpy()
-                # # print(norm.shape)    16,8
-                # norm=(norm-np.min(norm))/(np.max(norm)-np.min(norm)  )*255
-                
-                # norm =np.uint8(norm)
-                
-                # norm= np.stack([norm,norm,norm],axis=-1) 
-                # image = Image.fromarray(norm)
-                
-                # # image.save(os.path.join('exp',f"norm{0}_saved{self.save_t}.png"))
-                # self.save_t+=1
-                # input=x[0,::].permute(1,2,0).cpu().detach().numpy()
-                # input= (input-np.min(input))/(np.max(input)-np.min(input))*255
-                # input = np.uint8(input)
-                # image = Image.fromarray(input)
-                # # image.save(f"seg_img.png")
-                # print('saved img')
-            return cls_score, layerwise_cls_tokens, part_feat_list, d_score, seg_info, part_cls_score
+            return cls_score, layerwise_cls_tokens, part_feat_list, d_score, part_cls_score
         else:
             return feat if self.neck_feat == 'after' else layerwise_cls_tokens
 
