@@ -544,15 +544,15 @@ def build_loss(cfg, num_classes,nb_domain):
                 part_mask_target=[]
                 sem_loss_list=[]
                 part_xent_list=[]
-                for i in range(nb_sem):
-                    for j in range(nb_sem):
-                        if j>=i: break
-                        sem_loss_list.append(torch.nn.functional.cosine_similarity(segmentation[:,i],segmentation[:,j]))
-                    part_xent_loss = xent(part_cls_score[i], target) #, all_posvid=all_posvid, soft_label=soft_label,soft_weight=soft_weight, soft_lambda=soft_lambda)
+                # for i in range(nb_sem):
+                #     for j in range(nb_sem):
+                #         if j>=i: break
+                #         sem_loss_list.append(torch.nn.functional.cosine_similarity(segmentation[:,i],segmentation[:,j]))
+                #     part_xent_loss = xent(part_cls_score[i], target) #, all_posvid=all_posvid, soft_label=soft_label,soft_weight=soft_weight, soft_lambda=soft_lambda)
                         
-                    part_xent_list.append(part_xent_loss)
-                    part_mask_target=part_mask_target+[i]*b
-                part_mask_target=torch.tensor(part_mask_target).cuda()
+                #     part_xent_list.append(part_xent_loss)
+                #     part_mask_target=part_mask_target+[i]*b
+                # part_mask_target=torch.tensor(part_mask_target).cuda()
                 # print(part_mask_target   ,part_feat.shape )
                 # SEM_LOSS= torch.abs(segmentation-0.5).mean() *0 +\
                 #      torch.stack(part_xent_list).mean()*0  +\
@@ -580,6 +580,12 @@ def build_loss(cfg, num_classes,nb_domain):
                 if random.randint(0,100)==80:
                     print(f'showing loss with ,ID_LOSS:{cfg.MODEL.ID_LOSS_WEIGHT*ID_LOSS}, TRI_LOSS:{  cfg.MODEL.TRIPLET_LOSS_WEIGHT * TRI_LOSS},GRL_LOSS:{cfg.MODEL.ID_LOSS_WEIGHT*GRL_LOSS}')
                 # print(ID_LOSS,SEM_LOSS,TRI_LOSS,GRL_LOSS)
+                if torch.isnan(ID_LOSS    ) or torch.isnan(GRL_LOSS    ) or    torch.isnan(TRI_LOSS    ):
+                    print(f'showing loss with ,ID_LOSS:{cfg.MODEL.ID_LOSS_WEIGHT*ID_LOSS}, TRI_LOSS:{  cfg.MODEL.TRIPLET_LOSS_WEIGHT * TRI_LOSS},GRL_LOSS:{cfg.MODEL.ID_LOSS_WEIGHT*GRL_LOSS}')
+                    print(   'get nan!11111')
+                    ID_LOSS=torch.zeros(1)
+                    GRL_LOSS=torch.zeros(1)
+                    TRI_LOSS=torch.zeros(1)
                 return cfg.MODEL.ID_LOSS_WEIGHT * ID_LOSS +\
                             cfg.MODEL.ID_LOSS_WEIGHT *  GRL_LOSS +\
                                cfg.MODEL.TRIPLET_LOSS_WEIGHT * TRI_LOSS

@@ -17,8 +17,8 @@ from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 def load_mask(datasets):
     datapath_dict={
-        'DG_Market1501' : 'data/datasets/market1501_mask',
-        'Market1501' :'data/datasets/market1501_mask',
+        'DG_Market1501' : 'data/datasets/market1501_mask3',
+        'Market1501' :'data/datasets/market1501_mask3',
         
     }
     mask_dict={}
